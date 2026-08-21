@@ -1,0 +1,196 @@
+use GFX.Color
+use GFX.Canvas.Geometry
+use GFX.Scene2D.Grid
+use Interop.C
+use STD.Math
+
+func drawing_vertices(mesh:@Geometry.Mesh) str {
+    let source = mesh.vertices()
+    var bytes = storage(source.count() * 36)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    var index = 0
+    while index < source.count() {
+        let vertex = source[index]
+        let offset = index * 36
+        write_vec3(address, offset, vertex.position)
+        write_vec3(address, offset + 12, vertex.normal)
+        write_vec2(address, offset + 24, vertex.uv)
+        write_rgba8(address, offset + 32, vertex.color)
+        index++
+    }
+    return bytes
+}
+
+func drawing_instance(model:Math.Mat4, color:Color) str {
+    var bytes = storage(48)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_affine_instance(
+        address,
+        0,
+        Math.Vec2(model.x.x, model.x.y),
+        Math.Vec2(model.y.x, model.y.y),
+        Math.Vec2(model.w.x, model.w.y),
+        model.w.z,
+        color
+    )
+    return bytes
+}
+
+func view_projection(value:Math.Mat4) str {
+    var bytes = storage(64)
+    write_mat4(C.address_bits(C.mutable_string_pointer(bytes)), 0, value)
+    return bytes
+}
+
+func grid(inverse_view_projection:Math.Mat4, value:Grid) str {
+    var bytes = storage(144)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_mat4(address, 0, inverse_view_projection)
+    write_color(address, 64, value.minor_color)
+    write_color(address, 80, value.major_color)
+    write_color(address, 96, value.x_axis_color)
+    write_color(address, 112, value.y_axis_color)
+    write_vec4(address, 128, Math.Vec4(
+        value.spacing,
+        value.major_every as float,
+        value.line_width,
+        value.axis_width
+    ))
+    return bytes
+}
+
+func sprite_uniform(
+    model:Math.Mat4,
+    projection:Math.Mat4,
+    size:Math.Vec2,
+    pivot:Math.Vec2,
+    color:Color
+) str {
+    var bytes = storage(256)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_mat4(address, 0, model)
+    write_mat4(address, 64, Math.Mat4.identity())
+    write_mat4(address, 128, projection)
+    write_vec2(address, 192, size)
+    write_vec2(address, 200, pivot)
+    write_color(address, 208, color)
+    write_float(address, 224, 0.0)
+    write_float(address, 228, 0.0)
+    write_vec4(address, 240, Math.Vec4(0.0, 0.0, 1.0, 1.0))
+    return bytes
+}
+
+func scene_sprite_uniform(
+    model:Math.Mat4,
+    view_projection:Math.Mat4,
+    size:Math.Vec2,
+    pivot:Math.Vec2,
+    color:Color,
+    depth:float,
+    region:Math.Vec4
+) str {
+    var bytes = storage(256)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_mat4(address, 0, model)
+    write_mat4(address, 64, Math.Mat4.identity())
+    write_mat4(address, 128, view_projection)
+    write_vec2(address, 192, size)
+    write_vec2(address, 200, pivot)
+    write_color(address, 208, color)
+    write_float(address, 224, depth)
+    write_float(address, 228, 0.0)
+    write_vec4(address, 240, region)
+    return bytes
+}
+
+func quad_vertices() str {
+    var bytes = storage(64)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_vec2(address, 0, Math.Vec2(0.0, 0.0)); write_vec2(address, 8, Math.Vec2(0.0, 0.0))
+    write_vec2(address, 16, Math.Vec2(1.0, 0.0)); write_vec2(address, 24, Math.Vec2(1.0, 0.0))
+    write_vec2(address, 32, Math.Vec2(1.0, 1.0)); write_vec2(address, 40, Math.Vec2(1.0, 1.0))
+    write_vec2(address, 48, Math.Vec2(0.0, 1.0)); write_vec2(address, 56, Math.Vec2(0.0, 1.0))
+    return bytes
+}
+
+func quad_indices() str {
+    var bytes = storage(24)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    let values:uint32[] = [0, 1, 2, 0, 2, 3]
+    var index = 0
+    while index < values.count() {
+        let stored = C.store<uint32>(address, (index * 4) as uint, values[index])
+        index++
+    }
+    return bytes
+}
+
+func storage(minimum:int) str {
+    var bytes = "\0"
+    while C.byte_count(bytes) < minimum as uint { bytes = bytes + bytes }
+    return bytes
+}
+
+local func write_float(address:uint, offset:int, value:float) {
+    let stored = C.store<float32>(address, offset as uint, value as float32)
+}
+
+local func write_vec2(address:uint, offset:int, value:Math.Vec2) {
+    write_float(address, offset, value.x)
+    write_float(address, offset + 4, value.y)
+}
+
+local func write_vec3(address:uint, offset:int, value:Math.Vec3) {
+    write_float(address, offset, value.x)
+    write_float(address, offset + 4, value.y)
+    write_float(address, offset + 8, value.z)
+}
+
+local func write_vec4(address:uint, offset:int, value:Math.Vec4) {
+    write_float(address, offset, value.x)
+    write_float(address, offset + 4, value.y)
+    write_float(address, offset + 8, value.z)
+    write_float(address, offset + 12, value.w)
+}
+
+func write_mat4(address:uint, offset:int, value:Math.Mat4) {
+    write_vec4(address, offset, value.x)
+    write_vec4(address, offset + 16, value.y)
+    write_vec4(address, offset + 32, value.z)
+    write_vec4(address, offset + 48, value.w)
+}
+
+func write_affine_instance(
+    address:uint,
+    offset:int,
+    x:Math.Vec2,
+    y:Math.Vec2,
+    translation:Math.Vec2,
+    depth:float,
+    color:Color
+) {
+    write_vec2(address, offset, x)
+    write_vec2(address, offset + 8, y)
+    write_vec2(address, offset + 16, translation)
+    write_float(address, offset + 24, depth)
+    write_float(address, offset + 28, 0.0)
+    write_color(address, offset + 32, color)
+}
+
+func write_color(address:uint, offset:int, value:Color) {
+    write_float(address, offset, value.r)
+    write_float(address, offset + 4, value.g)
+    write_float(address, offset + 8, value.b)
+    write_float(address, offset + 12, value.a)
+}
+
+local func write_rgba8(address:uint, offset:int, value:Color) {
+    let red = C.store<uint8>(address, offset as uint, color_byte(value.r))
+    let green = C.store<uint8>(address, (offset + 1) as uint, color_byte(value.g))
+    let blue = C.store<uint8>(address, (offset + 2) as uint, color_byte(value.b))
+    let alpha = C.store<uint8>(address, (offset + 3) as uint, color_byte(value.a))
+}
+
+local func color_byte(value:float) uint8 {
+    return Math.round(Math.clamp(value, 0.0, 1.0) * 255.0) as uint8
+}

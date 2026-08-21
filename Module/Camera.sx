@@ -1,0 +1,69 @@
+use STD.Math
+use GFX.Scene2D.Transform
+
+// Scene2D world coordinates use X right and Y up. Projection returns ordinary
+// viewport coordinates with their origin at the top left.
+public struct Camera {
+    var active:bool
+    var zoom:float
+    var viewport_size:Math.Vec2
+    var order:int
+
+    init(
+        active:bool = true,
+        zoom:float = 1.0,
+        viewport_size:Math.Vec2 = Math.Vec2(),
+        order:int = 0
+    ) {
+        self.active = active
+        self.zoom = zoom
+        self.viewport_size = viewport_size
+        self.order = order
+    }
+
+    func view(transform:@Transform) Math.Mat4 {
+        return transform.view_matrix()
+    }
+
+    func is_active() bool { return self.active }
+
+    func render_order() int { return self.order }
+
+    func projection(fallback:Math.Vec2) Math.Mat4 {
+        let viewport = self.viewport(fallback)
+        var zoom = self.zoom
+        if zoom <= 0.0 { zoom = 1.0 }
+        let half_width = viewport.x * 0.5 / zoom
+        let half_height = viewport.y * 0.5 / zoom
+        return Math.Mat4.orthographic(
+            -half_width,
+            half_width,
+            -half_height,
+            half_height,
+            -1.0,
+            1.0
+        )
+    }
+
+    func viewport(fallback:Math.Vec2) Math.Vec2 {
+        var width = self.viewport_size.x
+        var height = self.viewport_size.y
+        if width <= 0.0 { width = fallback.x }
+        if height <= 0.0 { height = fallback.y }
+        if width <= 0.0 { width = 1.0 }
+        if height <= 0.0 { height = 1.0 }
+        return Math.Vec2(width, height)
+    }
+
+    func project(point:Math.Vec2, transform:@Transform, fallback:Math.Vec2) Math.Vec2? {
+        let viewport = self.viewport(fallback)
+        let clip = self.projection(viewport)
+            .multiply(self.view(transform))
+            .multiply(Math.Vec4(point.x, point.y, 0.0, 1.0))
+        if clip.w == 0.0 { return null }
+        return Math.Vec2(
+            (clip.x / clip.w + 1.0) * 0.5 * viewport.x,
+            (1.0 - clip.y / clip.w) * 0.5 * viewport.y
+        )
+    }
+}

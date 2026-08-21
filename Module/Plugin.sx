@@ -1,0 +1,75 @@
+use GFX.Application
+use GFX.Application.Plugin as PluginProtocol
+use GFX.Application.Schedule
+use GFX.Assets.Image
+use GFX.Assets.Plugin as AssetsPlugin
+use GFX.ECS
+use GFX.GPU
+use GFX.Rendering
+use GFX.Rendering.Renderer as RenderingRenderer
+use GFX.Scene2D.Camera as SceneCamera
+use GFX.Scene2D.Canvas as SceneCanvas
+use GFX.Scene2D.Renderer
+use GFX.Scene2D.Sprite as SceneSprite
+use GFX.Scene2D.Transform
+use GFX.Window
+
+public struct Plugin:PluginProtocol {
+    func id() str { return "GFX.Scene2D.Plugin" }
+
+    func build(application:&Application) {
+        application.add_plugin(ECS.Plugin())
+        application.add_plugin(AssetsPlugin())
+        application.add_plugin(Rendering.Plugin())
+        application.add_resource(Renderer())
+        {
+            var resources = application.resources()
+            var renderer = resources.get_mut<Rendering.Renderer>()
+            renderer.add_pass("GFX.Scene2D", render_scene)
+        }
+        application.add_system(Schedule.startup, start_scene)
+        application.add_system(Schedule.render, prepare_scene)
+        application.add_system(Schedule.shutdown, stop_scene)
+    }
+}
+
+func start_scene(
+    device:@GPU.Device,
+    surface:@GPU.Surface,
+    rendering:@RenderingRenderer,
+    renderer:&Renderer
+) {
+    renderer.start(device, surface, rendering.sample_count())
+}
+
+func prepare_scene(
+    device:@GPU.Device,
+    canvases:ECS.Query<(ECS.Entity, @Transform, @SceneCanvas)>,
+    sprites:ECS.Query<(ECS.Entity, @Transform, @SceneSprite)>,
+    cameras:ECS.Query<(@Transform, @SceneCamera)>,
+    window:@Window,
+    images:@Image.Store,
+    renderer:&Renderer
+) {
+    renderer.begin_prepare(window)
+    for (transform, camera) in cameras {
+        renderer.consider_camera(transform, camera)
+    }
+    for (entity, transform, canvas) in canvases {
+        renderer.collect_canvas(device, entity, transform, canvas)
+    }
+    for (entity, transform, sprite) in sprites {
+        renderer.collect_sprite(device, entity, transform, sprite, images)
+    }
+    renderer.finish_prepare(device)
+}
+
+func render_scene(pass:@GPU.RenderPass, application:@Application) {
+    var renderer = application.resources().get<Renderer>()
+    renderer.draw(pass)
+}
+
+func stop_scene(application:Application) {
+    var removed = application.resources().remove<Renderer>()
+    assert(removed != null)
+}

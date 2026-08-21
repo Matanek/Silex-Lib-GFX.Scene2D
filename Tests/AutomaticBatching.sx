@@ -1,0 +1,56 @@
+use GFX.Application
+use GFX.Canvas
+use GFX.Color
+use GFX.Components
+use GFX.ECS
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+func identical_drawing() Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(1.0), Math.Vec2(14.0)),
+            Canvas.Fill.solid(Color.white())
+        )
+    })
+}
+
+func create_identical_geometry(world:&ECS.World) {
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D(position:Math.Vec2(-10.0, 0.0)))
+        ..with(Components.Canvas(identical_drawing(), 16, 16))
+    )
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D(position:Math.Vec2(10.0, 0.0)))
+        ..with(Components.Canvas(identical_drawing(), 16, 16)
+            ..color = Color.cyan_400()
+        )
+    )
+}
+
+func require_automatic_batch(
+    renderer:@Rendering.Renderer,
+    controller:&Application.Controller
+) {
+    assert(renderer.stats().draw_calls() == 1)
+    assert(renderer.stats().pipeline_bindings() == 1)
+    assert(renderer.stats().instances() == 2)
+    controller.stop()
+}
+
+test "batch equivalent Canvas geometry without shared application state" {
+    var application = Application()
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D automatic batching"
+        ..width = 64
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_identical_geometry)
+    application.add_after_system(Application.Schedule.render, require_automatic_batch)
+    assert(application.run() == 0)
+}

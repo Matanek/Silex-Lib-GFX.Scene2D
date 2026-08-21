@@ -1,0 +1,235 @@
+use GFX.Application
+use GFX.Color
+use GFX.Canvas
+use GFX.Components
+use GFX.ECS
+use GFX.Plugins
+use GFX.Resources
+use STD.Math
+use STD.Time.LocalTime
+
+static struct Constants {
+    let canvas_size:int = 640
+
+    func background_color() Color {
+        return Color.bytes(215, 210, 203)
+    }
+}
+
+func clock_point(center:Math.Vec2, radius:float, angle:float) Math.Vec2 {
+    return center.add(Math.Vec2(Math.cos(angle), Math.sin(angle)).multiply(radius))
+}
+
+func paint_ticks(painter:&Canvas.Painter, center:Math.Vec2) {
+    var tick = 0
+    while tick < 60 {
+        let angle = -Math.pi() * 0.5 + Math.two_pi() * tick as float / 60.0
+        var inner_radius = 246.0
+        var width = 1.4
+        if tick % 5 == 0 {
+            inner_radius = 232.0
+            width = 3.0
+        }
+        painter.stroke(
+            Canvas.Line(
+                clock_point(center, inner_radius, angle),
+                clock_point(center, 258.0, angle)
+            ),
+            Canvas.Stroke(Color.bytes(91, 76, 76), width)
+                ..cap = Canvas.StrokeCap.round
+        )
+        tick++
+    }
+}
+
+func paint_numbers(painter:&Canvas.Painter, font:Canvas.Font, center:Math.Vec2) {
+    var style = Canvas.TextStyle(
+        size:38.0,
+        color:Color.bytes(91, 70, 73),
+        alignment:Canvas.TextAlignment.center,
+        font:font
+    )
+    var hour = 1
+    while hour <= 12 {
+        let angle = -Math.pi() * 0.5 + Math.two_pi() * hour as float / 12.0
+        let position = clock_point(center, 198.0, angle)
+        painter.text("$(hour)", Math.Vec2(position.x, position.y - 22.0), style)
+        hour++
+    }
+}
+
+func paint_hand(
+    painter:&Canvas.Painter,
+    center:Math.Vec2,
+    angle:float,
+    length:float,
+    tail:float,
+    width:float,
+    color:Color
+) {
+    let direction = Math.Vec2(Math.cos(angle), Math.sin(angle))
+    painter.stroke(
+        Canvas.Line(
+            center.subtract(direction.multiply(tail)),
+            center.add(direction.multiply(length))
+        ),
+        Canvas.Stroke(color, width)..cap = Canvas.StrokeCap.round
+    )
+}
+
+func clock_face_drawing(font:Canvas.Font) Canvas {
+    let center = Math.Vec2(320.0)
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(center.add(Math.Vec2(0.0, 7.0)), 294.0),
+            Canvas.Fill.solid(Color.black().with_alpha(0.20))
+        )
+        painter.fill(
+            Canvas.Circle(center, 292.0),
+            Canvas.Fill.solid(Color.bytes(221, 191, 177))
+        )
+        painter.fill(
+            Canvas.Circle(center, 285.0),
+            Canvas.Fill.solid(Color.bytes(247, 246, 241))
+        )
+        painter.stroke(
+            Canvas.Circle(center, 285.0),
+            Canvas.Stroke(Color.bytes(180, 174, 166), 2.0)
+        )
+        painter.stroke(
+            Canvas.Circle(center, 278.0),
+            Canvas.Stroke(Color.bytes(225, 220, 212), 1.5)
+        )
+        paint_ticks(painter, center)
+        paint_numbers(painter, font, center)
+    })
+    return drawing
+}
+
+func clock_hands_drawing(seconds_of_day:float) Canvas {
+    let center = Math.Vec2(320.0)
+    let ink = Color.bytes(82, 67, 68)
+    let hours = seconds_of_day / 3_600.0
+    let minutes = seconds_of_day / 60.0
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        let hour_angle = -Math.pi() * 0.5 + Math.two_pi() * hours / 12.0
+        let minute_angle = -Math.pi() * 0.5 + Math.two_pi() * minutes / 60.0
+        let second_angle = -Math.pi() * 0.5 + Math.two_pi() * seconds_of_day / 60.0
+        paint_hand(painter, center, hour_angle, 132.0, 18.0, 11.0, ink)
+        paint_hand(painter, center, minute_angle, 184.0, 22.0, 7.0, ink)
+        paint_hand(
+            painter,
+            center,
+            second_angle,
+            210.0,
+            31.0,
+            2.2,
+            Color.bytes(156, 79, 70)
+        )
+        painter.fill(Canvas.Circle(center, 12.0), Canvas.Fill.solid(ink))
+        painter.fill(
+            Canvas.Circle(center, 5.0),
+            Canvas.Fill.solid(Color.bytes(221, 191, 177))
+        )
+    })
+    return drawing
+}
+
+func seconds_of_day(time:LocalTime) float {
+    let milliseconds = time.nanosecond / 1_000_000
+    return time.hour as float * 3_600.0 + time.minute as float * 60.0 +
+        time.second as float + milliseconds as float / 1_000.0
+}
+
+struct ClockFace {
+    var display:ECS.Entity? = null
+    var seconds:float = 0.0
+    var since_sync:float
+    var last_millisecond:int = -1
+}
+
+func synchronized_difference(current:float, target:float) float {
+    var difference = target - current
+    while difference > 43_200.0 { difference -= 86_400.0 }
+    while difference < -43_200.0 { difference += 86_400.0 }
+    return difference
+}
+
+func create_clock(world:&Resources.World, face:&ClockFace) {
+    face.seconds = seconds_of_day(LocalTime.now())
+    face.since_sync = 0.0
+    face.last_millisecond = -1
+    var clock_face = clock_face_drawing(Canvas.Font.default())
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(
+            clock_face,
+            Constants.canvas_size,
+            Constants.canvas_size
+        )
+            ..anchor = Math.Vec2(0.5)
+            ..pivot = Math.Vec2(0.5)
+            ..space = Components.CanvasSpace.viewport
+        )
+    )
+    var hands = clock_hands_drawing(face.seconds)
+    face.display = world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(
+            hands,
+            Constants.canvas_size,
+            Constants.canvas_size
+        )
+            ..anchor = Math.Vec2(0.5)
+            ..pivot = Math.Vec2(0.5)
+            ..space = Components.CanvasSpace.viewport
+            ..layer = 1
+        )
+    )
+}
+
+func update_clock(
+    time:@Resources.FrameTime,
+    world:&Resources.World,
+    face:&ClockFace
+) {
+    face.seconds += time.delta
+    face.since_sync += time.delta
+    if face.seconds >= 86_400.0 { face.seconds -= 86_400.0 }
+    if face.since_sync >= 1.0 {
+        let target = seconds_of_day(LocalTime.now())
+        let difference = synchronized_difference(face.seconds, target)
+        if Math.abs(difference) > 1.0 { face.seconds = target }
+        else { face.seconds += difference * 0.125 }
+        face.since_sync = 0.0
+    }
+    let millisecond = Math.floor(face.seconds * 1_000.0) as int
+    if millisecond == face.last_millisecond { return }
+    var drawing = clock_hands_drawing(face.seconds)
+    if let display = face.display {
+        world.update<Components.Canvas>(display, func(canvas:&Components.Canvas) {
+            canvas.replace(drawing)
+        })
+    }
+    face.last_millisecond = millisecond
+}
+
+func main() {
+    Application()
+        ..add_resource(ClockFace(since_sync:0.0))
+        ..add_plugin(Plugins.Window(Plugins.Window.Settings()
+            ..title = "Clock — GFX.Canvas"
+            ..width = Constants.canvas_size
+            ..height = Constants.canvas_size
+        ))
+        ..add_plugin(Plugins.Time())
+        ..add_plugin(Plugins.Rendering(Plugins.Rendering.Settings()
+            ..clear = Constants.background_color()
+        ))
+        ..add_plugin(Plugins.Scene2D())
+        ..add_system(Application.Schedule.startup, create_clock)
+        ..add_system(Application.Schedule.update, update_clock)
+        ..run()
+}

@@ -1,0 +1,27 @@
+use GFX.Canvas.Canvas as AuthoredCanvas
+use GFX.Components
+use GFX.Plugins
+use GFX.Resources
+use GFX.Scene2D
+
+func injected(camera:&Resources.ViewportCamera2D) {}
+
+test "consume Scene2D directly and through the GFX catalogs" {
+    var direct = Scene2D.Canvas(AuthoredCanvas(), 16, 16)
+    var catalog = Components.Canvas(AuthoredCanvas(), 16, 16)
+    let transform = Components.Transform2D()
+    let camera = Components.Camera2D()
+    let scene = Plugins.Scene2D()
+    let grid = Plugins.Grid2D()
+    let viewport = Plugins.ViewportCamera2D(Plugins.ViewportCamera2D.Settings(
+        zoom:2.0
+    ))
+
+    assert(direct.width() == 16)
+    assert(catalog.height() == 16)
+    assert(transform.scale.x == 1.0)
+    assert(camera.is_active())
+    assert(scene.id() == "GFX.Scene2D.Plugin")
+    assert(grid.id() == "GFX.Scene2D.Grid")
+    assert(viewport.id() == "GFX.Scene2D.ViewportCamera")
+}

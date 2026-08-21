@@ -1,0 +1,88 @@
+use GFX.Application
+use GFX.Assets.Image
+use GFX.Color
+use GFX.Canvas
+use GFX.Components
+use GFX.ECS
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+func create_scene(world:&ECS.World, images:&Image.Store) {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(16.0), 12.0),
+            Canvas.Fill.solid(Color.sky_400())
+        )
+        painter.stroke(
+            Canvas.Line(Math.Vec2(4.0, 16.0), Math.Vec2(28.0, 16.0)),
+            Canvas.Stroke(Color.white(), 2.0)..cap = Canvas.StrokeCap.round
+        )
+        painter.text(
+            "2D",
+            Math.Vec2(8.0, 9.0),
+            Canvas.TextStyle(size:9.0, color:Color.white(), font:Canvas.Font.default())
+        )
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform())
+        ..with(Scene2D.Canvas(drawing, 32, 32)
+            ..anchor = Math.Vec2(0.5)
+            ..pivot = Math.Vec2(0.5)
+            ..space = Scene2D.CanvasSpace.viewport
+        )
+    )
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D(position:Math.Vec2(-12.0, 0.0)))
+        ..with(Components.Canvas(drawing, 32, 32))
+    )
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D(position:Math.Vec2(-16.0, -16.0)))
+        ..with(Components.Canvas(drawing, 32, 32)
+            ..space = Components.CanvasSpace.viewport
+            ..anchor = Math.Vec2(1.0)
+        )
+    )
+    var transformed = Scene2D.Canvas(drawing, 32, 32)
+    transformed.size = Math.Vec2(24.0, 18.0)
+    transformed.pivot = Math.Vec2(0.25, 0.75)
+    transformed.color = Color.violet_400()
+    transformed.layer = 2
+    transformed.depth = 0.5
+    world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform(
+            position:Math.Vec2(12.0, 0.0),
+            rotation:Math.pi() * 0.25,
+            scale:Math.Vec2(1.5, 0.75)
+        ))
+        ..with(transformed)
+    )
+    let image = images.add(Image.solid(Color.cyan_400()))
+    world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform(position:Math.Vec2(0.0, 16.0)))
+        ..with(Scene2D.Sprite(image:image, size:Math.Vec2(8.0)))
+    )
+}
+
+func stop_after_render(controller:&Application.Controller) {
+    controller.stop()
+}
+
+test "render retained canvases and sprites through Scene2D" {
+    var application = Application()
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D Canvas integration"
+        ..width = 64
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin(Rendering.Plugin.Settings()
+        ..clear = Color.black()
+    ))
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_scene)
+    application.add_after_system(Application.Schedule.render, stop_after_render)
+    assert(application.run() == 0)
+}

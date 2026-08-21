@@ -1,0 +1,20 @@
+use GFX.Scene2D.ViewportCamera.Controller
+use GFX.Scene2D.ViewportCamera.ViewportCamera as ViewportCameraPlugin
+use STD.Math
+
+test "derive a reusable 2D viewport camera from position and zoom" {
+    var camera = Controller(ViewportCameraPlugin.Settings(position:Math.Vec2(12.0, -4.0), zoom:2.0))
+    assert(camera.transform().position == Math.Vec2(12.0, -4.0))
+    assert(camera.camera().zoom == 2.0)
+
+    camera.set_position(Math.Vec2(3.0, 7.0))
+    camera.set_zoom(4.0)
+    assert(camera.position() == Math.Vec2(3.0, 7.0))
+    assert(camera.zoom() == 4.0)
+}
+
+test "pan a 2D viewport camera at its current zoom" {
+    var camera = Controller(ViewportCameraPlugin.Settings(zoom:2.0, pan_sensitivity:1.0))
+    camera.pan(Math.Vec2(8.0, -6.0))
+    assert(camera.position() == Math.Vec2(-4.0, -3.0))
+}

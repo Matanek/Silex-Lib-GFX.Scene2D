@@ -1,0 +1,812 @@
+use GFX.Assets.Image
+use GFX.Color
+use GFX.Canvas.Snapshot
+use GFX.ECS
+use GFX.GPU
+use GFX.Scene2D.Camera
+use GFX.Scene2D.Canvas as SceneCanvas
+use GFX.Scene2D.Grid
+use GFX.Scene2D.Packing
+use GFX.Scene2D.Sprite
+use GFX.Scene2D.Transform
+use GFX.Window
+use Interop.C
+use STD.Collections.Dictionary
+use STD.Collections.Hashing
+use STD.Math
+
+class CachedSceneDrawing {
+    let geometry_hash:uint
+    let packed_vertices:str
+    var vertices:GPU.Buffer? = null
+    var upload:GPU.TransferBuffer? = null
+    let vertex_count:int
+
+    init(geometry_hash:uint, packed_vertices:str, vertex_count:int) {
+        self.geometry_hash = geometry_hash
+        self.packed_vertices = packed_vertices
+        self.vertex_count = vertex_count
+    }
+
+    func bytes() str { return self.packed_vertices }
+}
+
+class CachedImage {
+    let kind:int
+    let index:int
+    let generation:int
+    var revision:int
+    var texture:GPU.Texture? = null
+
+    init(kind:int, index:int, generation:int) {
+        self.kind = kind
+        self.index = index
+        self.generation = generation
+        self.revision = 0
+    }
+}
+
+struct SceneDraw {
+    let cache:int
+    let model_x:Math.Vec2
+    let model_y:Math.Vec2
+    let model_translation:Math.Vec2
+    let color:Color
+    let layer:int
+    let depth:float
+    let order:int
+    let viewport:bool
+}
+
+struct SpriteDraw {
+    let cache:int
+    let model:Math.Mat4
+    let size:Math.Vec2
+    let pivot:Math.Vec2
+    let color:Color
+    let region:Math.Vec4
+    let sampling:int
+    let layer:int
+    let depth:float
+    let order:int
+    let viewport:bool
+}
+
+struct SceneEntry {
+    let kind:int
+    let index:int
+    let layer:int
+    let depth:float
+    let order:int
+}
+
+class Renderer {
+    private var drawing_pipeline:GPU.GraphicsPipeline? = null
+    private var sprite_pipeline:GPU.GraphicsPipeline? = null
+    private var grid_pipeline:GPU.GraphicsPipeline? = null
+    private var sampler:GPU.Sampler? = null
+    private var pixelated_sampler:GPU.Sampler? = null
+    private var quad_vertices:GPU.Buffer? = null
+    private var quad_indices:GPU.Buffer? = null
+    private var scene_drawing_cache:CachedSceneDrawing[]
+    private var scene_drawing_snapshots:Dictionary<int, int>
+    private var last_scene_snapshot_id:int
+    private var last_scene_cache_index:int
+    private var image_cache:CachedImage[]
+    private var scene_draws:SceneDraw[]
+    private var sprite_draws:SpriteDraw[]
+    private var scene_entries:SceneEntry[]
+    private var drawing_instances:GPU.Buffer? = null
+    private var drawing_instance_upload:GPU.TransferBuffer? = null
+    private var drawing_instance_capacity:int
+    private var drawing_instance_packed:str
+    private var projection:Math.Mat4
+    private var scene_view_projection:Math.Mat4
+    private var viewport:Math.Vec2
+    private var display_scale:float
+    private var selected_camera:bool
+    private var selected_camera_order:int
+    private var camera_ready:bool
+    private var grid:Grid? = null
+
+    init() {
+        self.scene_drawing_cache = []
+        self.scene_drawing_snapshots = Dictionary<int, int>(minimum_capacity:256)
+        self.last_scene_snapshot_id = -1
+        self.last_scene_cache_index = -1
+        self.image_cache = []
+        self.scene_draws = []
+        self.sprite_draws = []
+        self.scene_entries = []
+        self.drawing_instance_capacity = 0
+        self.drawing_instance_packed = "\0"
+        self.projection = Math.Mat4.identity()
+        self.scene_view_projection = Math.Mat4.identity()
+        self.viewport = Math.Vec2(1.0)
+        self.display_scale = 1.0
+        self.selected_camera = false
+        self.selected_camera_order = 0
+        self.camera_ready = false
+    }
+
+    func start(
+        device:@GPU.Device,
+        surface:@GPU.Surface,
+        samples:GPU.Samples
+    ) {
+        let target = color_target(surface.format())
+
+        var drawing_buffers:GPU.VertexBufferLayout[] = []
+        drawing_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:36))
+        drawing_buffers.append(GPU.VertexBufferLayout(
+            slot:1,
+            pitch:48,
+            rate:GPU.VertexRate.instance
+        ))
+        var drawing_attributes:GPU.VertexAttribute[] = []
+        drawing_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x3, offset:0))
+        drawing_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x3, offset:12))
+        drawing_attributes.append(GPU.VertexAttribute(location:2, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:24))
+        drawing_attributes.append(GPU.VertexAttribute(location:3, buffer_slot:0, format:GPU.VertexFormat.unsigned_8x4_normalized, offset:32))
+        drawing_attributes.append(GPU.VertexAttribute(location:4, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:0))
+        drawing_attributes.append(GPU.VertexAttribute(location:5, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:8))
+        drawing_attributes.append(GPU.VertexAttribute(location:6, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:16))
+        drawing_attributes.append(GPU.VertexAttribute(location:7, buffer_slot:1, format:GPU.VertexFormat.float_32, offset:24))
+        drawing_attributes.append(GPU.VertexAttribute(location:8, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:32))
+        self.drawing_pipeline = device.graphics_pipeline(
+            GPU.ShaderProgram.hlsl(file:"../Shaders/Drawing.hlsl"),
+            GPU.GraphicsPipelineSettings(
+                vertex_buffers:drawing_buffers,
+                attributes:drawing_attributes,
+                rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                multisample:GPU.MultisampleState(samples:samples),
+                color_targets:target,
+                name:"GFX.Scene2D vector drawing"
+            )
+        )
+
+        var sprite_buffers:GPU.VertexBufferLayout[] = []
+        sprite_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:16))
+        var sprite_attributes:GPU.VertexAttribute[] = []
+        sprite_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:0))
+        sprite_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:8))
+        self.sprite_pipeline = device.graphics_pipeline(
+            GPU.ShaderProgram.hlsl(file:"../Shaders/Sprite.hlsl"),
+            GPU.GraphicsPipelineSettings(
+                vertex_buffers:sprite_buffers,
+                attributes:sprite_attributes,
+                rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                multisample:GPU.MultisampleState(samples:samples),
+                color_targets:target,
+                name:"GFX.Scene2D drawing text"
+            )
+        )
+        if self.grid != null {
+            self.grid_pipeline = device.graphics_pipeline(
+                GPU.ShaderProgram.hlsl(file:"../Shaders/Grid.hlsl"),
+                GPU.GraphicsPipelineSettings(
+                    rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                    multisample:GPU.MultisampleState(samples:samples),
+                    color_targets:target,
+                    name:"GFX.Scene2D viewport grid"
+                )
+            )
+        }
+        self.sampler = device.sampler(GPU.SamplerSettings(
+            min_filter:GPU.Filter.linear,
+            mag_filter:GPU.Filter.linear,
+            address_u:GPU.AddressMode.clamp_to_edge,
+            address_v:GPU.AddressMode.clamp_to_edge,
+            name:"GFX.Scene2D text sampler"
+        ))
+        self.pixelated_sampler = device.sampler(GPU.SamplerSettings(
+            min_filter:GPU.Filter.nearest,
+            mag_filter:GPU.Filter.nearest,
+            address_u:GPU.AddressMode.clamp_to_edge,
+            address_v:GPU.AddressMode.clamp_to_edge,
+            name:"GFX.Scene2D pixelated sprite sampler"
+        ))
+        self.quad_vertices = upload_buffer(
+            device,
+            Packing.quad_vertices(),
+            64,
+            GPU.BufferUsage.vertex(),
+            "GFX.Scene2D text quad vertices"
+        )
+        self.quad_indices = upload_buffer(
+            device,
+            Packing.quad_indices(),
+            24,
+            GPU.BufferUsage.index(),
+            "GFX.Scene2D text quad indices"
+        )
+    }
+
+    func begin_prepare(window:@Window) {
+        let pixels = window.pixel_size()
+        self.display_scale = window.display_scale()
+        if self.display_scale <= 0.0 { self.display_scale = 1.0 }
+        self.viewport = Math.Vec2(
+            pixels.x / self.display_scale,
+            pixels.y / self.display_scale
+        )
+        self.projection = Math.Mat4.orthographic(
+            0.0, self.viewport.x, self.viewport.y, 0.0, -1.0, 1.0
+        )
+        var default_camera = Camera()
+        self.scene_view_projection = default_camera.projection(self.viewport)
+        self.camera_ready = true
+        self.selected_camera = false
+        self.selected_camera_order = 0
+        self.scene_draws.clear()
+        self.sprite_draws.clear()
+        self.scene_entries.clear()
+    }
+
+    func consider_camera(transform:@Transform, camera:@Camera) {
+        if camera.is_active() &&
+            (!self.selected_camera || camera.render_order() < self.selected_camera_order)
+        {
+            self.scene_view_projection = camera.projection(self.viewport)
+                .multiply(camera.view(transform))
+            self.camera_ready = true
+            self.selected_camera = true
+            self.selected_camera_order = camera.render_order()
+        }
+    }
+
+    func collect_canvas(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        transform:@Transform,
+        canvas:@SceneCanvas
+    ) {
+        if !canvas.visible { return }
+        let snapshot_id = canvas.snapshot_id()
+        var cache_index = self.known_scene_drawing_cache(snapshot_id)
+        if cache_index < 0 {
+            var snapshot = canvas.snapshot()
+            cache_index = self.register_scene_drawing(snapshot)
+        }
+        var cache = self.scene_drawing_cache[cache_index]
+        if cache.vertices == null { self.refresh_scene_geometry(device, cache) }
+        let model = canvas.affine_model(transform, self.viewport)
+        self.scene_draws.append(SceneDraw(
+            cache:cache_index,
+            model_x:model.x,
+            model_y:model.y,
+            model_translation:model.translation,
+            color:canvas.color,
+            layer:canvas.layer,
+            depth:canvas.depth,
+            order:entity.index * 2,
+            viewport:canvas.uses_viewport()
+        ))
+        if canvas.has_text() {
+            var snapshot = canvas.snapshot()
+            let text = snapshot.text_layer(self.display_scale)
+            let scale_key = Math.round(self.display_scale * 1000.0) as int
+            var image_cache = self.cache_for_image(1, snapshot.id(), scale_key)
+            self.refresh_image(
+                device,
+                image_cache,
+                canvas.revision(),
+                text.image,
+                "GFX.Scene2D canvas text"
+            )
+            self.sprite_draws.append(SpriteDraw(
+                cache:self.image_index(image_cache),
+                model:canvas.text_model(transform, self.viewport),
+                size:canvas.text_size(text.size),
+                pivot:canvas.text_pivot(text.origin, text.size),
+                color:canvas.color,
+                region:Math.Vec4(0.0, 0.0, 1.0, 1.0),
+                sampling:0,
+                layer:canvas.layer,
+                depth:canvas.depth,
+                order:entity.index * 2 + 1,
+                viewport:canvas.uses_viewport()
+            ))
+        }
+    }
+
+    func collect_sprite(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        transform:@Transform,
+        sprite:@Sprite,
+        images:@Image.Store
+    ) {
+        let handle = sprite.asset()
+        if !sprite.is_visible() || !images.contains(handle) { return }
+        let image = images.snapshot(handle)
+        var cache = self.cache_for_image(0, handle.index(), handle.generation())
+        self.refresh_image(
+            device,
+            cache,
+            images.revision(handle),
+            image,
+            "GFX.Scene2D sprite"
+        )
+        self.sprite_draws.append(SpriteDraw(
+            cache:self.image_index(cache),
+            model:world_image_model(transform),
+            size:sprite.sprite_size(),
+            pivot:sprite.sprite_pivot(),
+            color:sprite.tint(),
+            region:normalized_region(image, sprite.image_region()),
+            sampling:sprite.sampling_mode(),
+            layer:sprite.render_layer(),
+            depth:sprite.render_depth(),
+            order:entity.index * 2,
+            viewport:false
+        ))
+    }
+
+    func finish_prepare(device:@GPU.Device) {
+        sort_scene_draws(self.scene_draws)
+        sort_sprite_draws(self.sprite_draws)
+        self.rebuild_scene_entries()
+        self.prepare_scene_instances(device)
+    }
+
+    func draw(pass:@GPU.RenderPass) {
+        self.draw_grid(pass)
+        self.draw_scene(pass)
+    }
+
+    func set_grid(value:Grid) { self.grid = value }
+
+    private func draw_grid(pass:@GPU.RenderPass) {
+        if !self.camera_ready { return }
+        if let configured = self.grid {
+            if let pipeline = self.grid_pipeline {
+                pass.bind(pipeline)
+                var uniform = Packing.grid(
+                    self.scene_view_projection.inverted(),
+                    configured
+                )
+                pass.vertex_uniform(0, uniform, 144)
+                pass.draw(3)
+            }
+        }
+    }
+
+    private func draw_scene(pass:@GPU.RenderPass) {
+        if !self.camera_ready { return }
+        var cursor = 0
+        while cursor < self.scene_entries.count() {
+            let entry = self.scene_entries[cursor]
+            if entry.kind == 0 {
+                let draw = self.scene_draws[entry.index]
+                var cache = self.scene_drawing_cache[draw.cache]
+                var end = cursor + 1
+                while end < self.scene_entries.count() {
+                    let next = self.scene_entries[end]
+                    if next.kind != 0 || next.index != entry.index + end - cursor ||
+                        self.scene_draws[next.index].cache != draw.cache ||
+                        self.scene_draws[next.index].viewport != draw.viewport
+                    {
+                        break
+                    }
+                    end++
+                }
+                if cache.vertex_count > 0 {
+                    if let pipeline = self.drawing_pipeline {
+                        if let vertices = cache.vertices {
+                            if let instances = self.drawing_instances {
+                                var selected_projection = self.scene_view_projection
+                                if draw.viewport { selected_projection = self.projection }
+                                var projection = Packing.view_projection(selected_projection)
+                                pass.bind(pipeline)
+                                pass.vertex_uniform(0, projection, 64)
+                                pass.vertex_buffer(0, vertices)
+                                pass.vertex_buffer(1, instances)
+                                pass.draw(
+                                    cache.vertex_count,
+                                    end - cursor,
+                                    0,
+                                    entry.index
+                                )
+                            }
+                        }
+                    }
+                }
+                cursor = end
+            } else {
+                self.draw_scene_sprite(pass, self.sprite_draws[entry.index])
+                cursor++
+            }
+        }
+    }
+
+    private func draw_scene_sprite(pass:@GPU.RenderPass, draw:SpriteDraw) {
+        var cache = self.image_cache[draw.cache]
+        if let texture = cache.texture {
+            if let pipeline = self.sprite_pipeline {
+                var selected_sampler = self.sampler
+                if draw.sampling == 1 { selected_sampler = self.pixelated_sampler }
+                if let sampler = selected_sampler {
+                    if let vertices = self.quad_vertices {
+                        if let indices = self.quad_indices {
+                            var selected_projection = self.scene_view_projection
+                            if draw.viewport { selected_projection = self.projection }
+                            var uniform = Packing.scene_sprite_uniform(
+                                draw.model,
+                                selected_projection,
+                                draw.size,
+                                draw.pivot,
+                                draw.color,
+                                draw.depth,
+                                draw.region
+                            )
+                            pass.bind(pipeline)
+                            pass.vertex_uniform(0, uniform, 256)
+                            pass.fragment_sampler(0, texture, sampler)
+                            pass.vertex_buffer(0, vertices)
+                            pass.index_buffer(indices)
+                            pass.draw_indexed(6)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func known_scene_drawing_cache(snapshot_id:int) int {
+        if snapshot_id == self.last_scene_snapshot_id {
+            return self.last_scene_cache_index
+        }
+        if self.scene_drawing_snapshots.contains(snapshot_id) {
+            let cache_index:int =
+                self.scene_drawing_snapshots.get(snapshot_id) + 0
+            self.last_scene_snapshot_id = snapshot_id
+            self.last_scene_cache_index = cache_index
+            return cache_index
+        }
+        return -1
+    }
+
+    private func register_scene_drawing(snapshot:@Snapshot) int {
+        let snapshot_id = snapshot.id()
+        let geometry = snapshot.geometry()
+        let packed = Packing.drawing_vertices(geometry)
+        let geometry_hash = Hashing.hash(packed)
+        var index = 0
+        while index < self.scene_drawing_cache.count() {
+            var cache = self.scene_drawing_cache[index]
+            if cache.geometry_hash == geometry_hash &&
+                cache.packed_vertices == packed
+            {
+                self.scene_drawing_snapshots.set(snapshot_id, index)
+                self.last_scene_snapshot_id = snapshot_id
+                self.last_scene_cache_index = index
+                return index
+            }
+            index++
+        }
+        var created = CachedSceneDrawing(
+            geometry_hash,
+            packed,
+            geometry.vertex_count()
+        )
+        self.scene_drawing_cache.append(created)
+        let created_index = self.scene_drawing_cache.count() - 1
+        self.scene_drawing_snapshots.set(snapshot_id, created_index)
+        self.last_scene_snapshot_id = snapshot_id
+        self.last_scene_cache_index = created_index
+        return created_index
+    }
+
+    private func refresh_scene_geometry(
+        device:@GPU.Device,
+        cache:&CachedSceneDrawing
+    ) {
+        if cache.vertices != null { return }
+        if cache.vertex_count == 0 { return }
+        let byte_count = cache.vertex_count * 36
+        cache.upload = device.upload_buffer(
+            byte_count,
+            "GFX.Scene2D retained drawing upload"
+        )
+        cache.vertices = device.buffer(GPU.BufferSettings(
+            size:byte_count,
+            usage:GPU.BufferUsage.vertex(),
+            name:"GFX.Scene2D retained drawing vertices"
+        ))
+        if let upload = cache.upload {
+            if let destination = cache.vertices {
+                upload.write_packed(cache.bytes(), byte_count)
+                copy_buffer(device, upload, destination, byte_count)
+            }
+        }
+    }
+
+    private func cache_for_image(kind:int, index:int, generation:int) CachedImage {
+        var cache_index = 0
+        while cache_index < self.image_cache.count() {
+            var cache = self.image_cache[cache_index]
+            if cache.kind == kind && cache.index == index &&
+                cache.generation == generation
+            {
+                return cache
+            }
+            cache_index++
+        }
+        var created = CachedImage(kind, index, generation)
+        self.image_cache.append(created)
+        return created
+    }
+
+    private func image_index(cache:@CachedImage) int {
+        var index = 0
+        while index < self.image_cache.count() {
+            var candidate = self.image_cache[index]
+            if candidate.kind == cache.kind && candidate.index == cache.index &&
+                candidate.generation == cache.generation
+            {
+                return index
+            }
+            index++
+        }
+        panic("GFX.Scene2D image cache is missing")
+    }
+
+    private func refresh_image(
+        device:@GPU.Device,
+        cache:&CachedImage,
+        revision:int,
+        image:@Image,
+        name:str
+    ) {
+        if cache.texture != null && cache.revision == revision { return }
+        cache.texture = upload_texture(device, image, name)
+        cache.revision = revision
+    }
+
+    private func prepare_scene_instances(device:@GPU.Device) {
+        if self.scene_draws.count() == 0 { return }
+        let byte_count = self.scene_draws.count() * 48
+        if self.drawing_instances == null || self.drawing_instance_capacity < byte_count {
+            self.drawing_instance_packed = Packing.storage(byte_count)
+            self.drawing_instance_upload = device.upload_buffer(
+                byte_count,
+                "GFX.Scene2D retained drawing instance upload"
+            )
+            self.drawing_instances = device.buffer(GPU.BufferSettings(
+                size:byte_count,
+                usage:GPU.BufferUsage.vertex(),
+                name:"GFX.Scene2D retained drawing instances"
+            ))
+            self.drawing_instance_capacity = byte_count
+        }
+        var bytes = self.drawing_instance_packed
+        let address = C.address_bits(C.mutable_string_pointer(bytes))
+        var index = 0
+        for draw in self.scene_draws {
+            let offset = index * 48
+            Packing.write_affine_instance(
+                address,
+                offset,
+                draw.model_x,
+                draw.model_y,
+                draw.model_translation,
+                draw.depth,
+                draw.color
+            )
+            index++
+        }
+        self.drawing_instance_packed = bytes
+        if let upload = self.drawing_instance_upload {
+            if let destination = self.drawing_instances {
+                upload.write_packed(bytes, byte_count, cycle:true)
+                copy_buffer(device, upload, destination, byte_count)
+            }
+        }
+    }
+
+    private func rebuild_scene_entries() {
+        self.scene_entries.clear()
+        var drawing_index = 0
+        var sprite_index = 0
+        while drawing_index < self.scene_draws.count() ||
+            sprite_index < self.sprite_draws.count()
+        {
+            if drawing_index >= self.scene_draws.count() {
+                let draw = self.sprite_draws[sprite_index]
+                self.scene_entries.append(scene_entry(1, sprite_index, draw))
+                sprite_index++
+            } else if sprite_index >= self.sprite_draws.count() {
+                let draw = self.scene_draws[drawing_index]
+                self.scene_entries.append(drawing_entry(drawing_index, draw))
+                drawing_index++
+            } else {
+                let drawing = self.scene_draws[drawing_index]
+                let sprite = self.sprite_draws[sprite_index]
+                if scene_draw_before_sprite(drawing, sprite) {
+                    self.scene_entries.append(drawing_entry(drawing_index, drawing))
+                    drawing_index++
+                } else {
+                    self.scene_entries.append(scene_entry(1, sprite_index, sprite))
+                    sprite_index++
+                }
+            }
+        }
+    }
+
+}
+
+local func color_target(format:GPU.TextureFormat) GPU.ColorTargetFormat[] {
+    var targets:GPU.ColorTargetFormat[] = []
+    targets.append(GPU.ColorTargetFormat(
+        format:format,
+        blend:GPU.BlendState(
+            source_color:GPU.BlendFactor.source_alpha,
+            destination_color:GPU.BlendFactor.one_minus_source_alpha,
+            source_alpha:GPU.BlendFactor.one,
+            destination_alpha:GPU.BlendFactor.one_minus_source_alpha,
+            enabled:true
+        )
+    ))
+    return targets
+}
+
+local func upload_buffer(
+    device:@GPU.Device,
+    bytes:str,
+    byte_count:int,
+    usage:GPU.BufferUsage,
+    name:str
+) GPU.Buffer {
+    var upload = device.upload_buffer(byte_count, name + " upload")
+    upload.write_packed(bytes, byte_count)
+    var destination = device.buffer(GPU.BufferSettings(
+        size:byte_count,
+        usage:usage,
+        name:name
+    ))
+    copy_buffer(device, upload, destination, byte_count)
+    return destination
+}
+
+local func copy_buffer(
+    device:@GPU.Device,
+    upload:@GPU.TransferBuffer,
+    destination:@GPU.Buffer,
+    count:int
+) {
+    var commands = device.commands()
+    var transfer = commands.copy()
+    transfer.upload(upload, destination, count)
+    transfer.finish()
+    commands.submit()
+}
+
+local func upload_texture(
+    device:@GPU.Device,
+    image:@Image,
+    name:str = "GFX.Scene2D drawing text"
+) GPU.Texture {
+    var texture = device.texture(GPU.TextureSettings(
+        format:GPU.TextureFormat.rgba8_unorm,
+        width:image.width(),
+        height:image.height(),
+        usage:GPU.TextureUsage.for_sampling(),
+        name:name
+    ))
+    var pixels = image.pixels()
+    var upload = device.upload_buffer(pixels.count(), name + " upload")
+    upload.write(@pixels[0:pixels.count()])
+    var commands = device.commands()
+    var transfer = commands.copy()
+    transfer.upload(
+        upload,
+        GPU.TextureRegion(texture:texture, width:image.width(), height:image.height()),
+        image.width(),
+        image.height()
+    )
+    transfer.finish()
+    commands.submit()
+    return texture
+}
+
+local func normalized_region(image:@Image, selected:Image.Region?) Math.Vec4 {
+    if let region = selected {
+        if region.x + region.width > image.width() ||
+            region.y + region.height > image.height()
+        {
+            panic("GFX.Scene2D sprite region exceeds its image dimensions")
+        }
+        return Math.Vec4(
+            region.x as float / image.width() as float,
+            region.y as float / image.height() as float,
+            region.width as float / image.width() as float,
+            region.height as float / image.height() as float
+        )
+    }
+    return Math.Vec4(0.0, 0.0, 1.0, 1.0)
+}
+
+local func scene_draw_before(left:SceneDraw, right:SceneDraw) bool {
+    if left.layer != right.layer { return left.layer < right.layer }
+    if left.depth != right.depth { return left.depth < right.depth }
+    return left.order < right.order
+}
+
+local func world_image_model(transform:@Transform) Math.Mat4 {
+    return Math.Mat4.transform(
+        Math.Vec3(transform.position.x, transform.position.y, 0.0),
+        Math.Quat.angle_axis(transform.rotation, Math.Vec3.back()).to_mat3(),
+        Math.Vec3(transform.scale.x, -transform.scale.y, 1.0)
+    )
+}
+
+local func sprite_draw_before(left:SpriteDraw, right:SpriteDraw) bool {
+    if left.layer != right.layer { return left.layer < right.layer }
+    if left.depth != right.depth { return left.depth < right.depth }
+    return left.order < right.order
+}
+
+local func scene_draw_before_sprite(left:SceneDraw, right:SpriteDraw) bool {
+    if left.layer != right.layer { return left.layer < right.layer }
+    if left.depth != right.depth { return left.depth < right.depth }
+    return left.order < right.order
+}
+
+local func sort_scene_draws(draws:&SceneDraw[]) {
+    var ordered = 1
+    while ordered < draws.count() &&
+        !scene_draw_before(draws[ordered], draws[ordered - 1])
+    {
+        ordered++
+    }
+    if ordered == draws.count() { return }
+    var index = 1
+    while index < draws.count() {
+        var cursor = index
+        while cursor > 0 && scene_draw_before(draws[cursor], draws[cursor - 1]) {
+            draws.swap(cursor, cursor - 1)
+            cursor--
+        }
+        index++
+    }
+}
+
+local func sort_sprite_draws(draws:&SpriteDraw[]) {
+    var ordered = 1
+    while ordered < draws.count() &&
+        !sprite_draw_before(draws[ordered], draws[ordered - 1])
+    {
+        ordered++
+    }
+    if ordered == draws.count() { return }
+    var index = 1
+    while index < draws.count() {
+        var cursor = index
+        while cursor > 0 && sprite_draw_before(draws[cursor], draws[cursor - 1]) {
+            draws.swap(cursor, cursor - 1)
+            cursor--
+        }
+        index++
+    }
+}
+
+local func drawing_entry(index:int, draw:SceneDraw) SceneEntry {
+    return SceneEntry(
+        kind:0,
+        index:index,
+        layer:draw.layer,
+        depth:draw.depth,
+        order:draw.order
+    )
+}
+
+local func scene_entry(kind:int, index:int, draw:SpriteDraw) SceneEntry {
+    return SceneEntry(
+        kind:kind,
+        index:index,
+        layer:draw.layer,
+        depth:draw.depth,
+        order:draw.order
+    )
+}

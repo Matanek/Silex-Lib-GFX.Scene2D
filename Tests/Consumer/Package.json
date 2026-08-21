@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "GFX": "^0.37.0",
+    "GFX.Canvas": "^0.1.0",
+    "GFX.Scene2D": "^0.1.0"
+  }
+}

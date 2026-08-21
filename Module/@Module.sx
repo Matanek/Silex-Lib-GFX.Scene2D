@@ -1,0 +1,28 @@
+public use GFX.Scene2D.Camera.Camera
+public use GFX.Scene2D.Canvas.Canvas
+public use GFX.Scene2D.Canvas.Space as CanvasSpace
+public use GFX.Scene2D.Grid.Grid
+public use GFX.Scene2D.Plugin.Plugin
+public use GFX.Scene2D.Sampling.Sampling
+public use GFX.Scene2D.Sprite.Sprite
+public use GFX.Scene2D.Transform.Transform
+public use GFX.Scene2D.ViewportCamera.ViewportCamera
+
+contribute GFX.Components {
+    public use GFX.Scene2D.Camera as Camera2D
+    public use GFX.Scene2D.Canvas.Canvas
+    public use GFX.Scene2D.Canvas.Space as CanvasSpace
+    public use GFX.Scene2D.Sprite as Sprite2D
+    public use GFX.Scene2D.Transform as Transform2D
+}
+
+contribute GFX.Plugins {
+    public use GFX.Scene2D.Grid as Grid2D
+    public use GFX.Scene2D.Plugin as Scene2D
+    public use GFX.Scene2D.ViewportCamera as ViewportCamera2D
+    public use GFX.Scene2D.ViewportCamera.Controls as ViewportCamera2DControls
+}
+
+contribute GFX.Resources {
+    public use GFX.Scene2D.ViewportCamera.Controller as ViewportCamera2D
+}

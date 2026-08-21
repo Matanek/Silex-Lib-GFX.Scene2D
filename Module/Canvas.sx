@@ -1,0 +1,153 @@
+use GFX.Color
+use GFX.Canvas.Canvas as AuthoredCanvas
+use GFX.Canvas.Snapshot
+use GFX.Scene2D.Transform
+use STD.Math
+
+public enum Space {
+    world
+    viewport
+}
+
+struct AffineModel {
+    let x:Math.Vec2
+    let y:Math.Vec2
+    let translation:Math.Vec2
+}
+
+// Retained Canvas content placed by Transform in either the Y-up 2D world or
+// the top-left, Y-down logical application viewport. Authored Canvas content
+// remains Y-down in both spaces and is oriented internally for the world.
+public struct Canvas {
+    private var retained:Snapshot
+    private var current_revision:int
+    private let drawing_width:int
+    private let drawing_height:int
+    var space:Space
+    var anchor:Math.Vec2
+    var size:Math.Vec2
+    var pivot:Math.Vec2
+    var color:Color
+    var layer:int
+    var depth:float
+    var visible:bool
+
+    init(drawing:AuthoredCanvas, width:int, height:int) {
+        if width <= 0 || height <= 0 {
+            panic("GFX.Scene2D.Canvas dimensions must be positive")
+        }
+        self.retained = drawing.snapshot(width, height)
+        self.current_revision = 1
+        self.drawing_width = width
+        self.drawing_height = height
+        self.space = Space.world
+        self.anchor = Math.Vec2()
+        self.size = Math.Vec2()
+        self.pivot = Math.Vec2(0.5)
+        self.color = Color.white()
+        self.layer = 0
+        self.depth = 0.0
+        self.visible = true
+    }
+
+    func replace(drawing:AuthoredCanvas) {
+        self.retained = drawing.snapshot(self.drawing_width, self.drawing_height)
+        self.current_revision++
+    }
+
+    func snapshot() Snapshot { return self.retained }
+    func revision() int { return self.current_revision }
+    func width() int { return self.drawing_width }
+    func height() int { return self.drawing_height }
+    module func snapshot_id() int { return self.retained.id() }
+    module func has_text() bool { return self.retained.has_text() }
+    module func uses_viewport() bool { return self.space == Space.viewport }
+
+    module func display_size() Math.Vec2 {
+        if self.size.x > 0.0 && self.size.y > 0.0 { return self.size }
+        return Math.Vec2(self.drawing_width as float, self.drawing_height as float)
+    }
+
+    module func affine_model(transform:@Transform, viewport:Math.Vec2) AffineModel {
+        let displayed = self.display_size()
+        let position = self.placed_position(transform, viewport)
+        let cosine = Math.cos(transform.rotation)
+        let sine = Math.sin(transform.rotation)
+        let transform_x = transform.scale.x
+        let transform_y = self.oriented_scale_y(transform.scale.y)
+        let scale_x = transform_x * displayed.x / self.drawing_width as float
+        let scale_y = transform_y * displayed.y / self.drawing_height as float
+        let pivot_x = -self.pivot.x * displayed.x
+        let pivot_y = -self.pivot.y * displayed.y
+        return AffineModel(
+            x:Math.Vec2(cosine * scale_x, sine * scale_x),
+            y:Math.Vec2(-sine * scale_y, cosine * scale_y),
+            translation:Math.Vec2(
+                position.x + cosine * transform_x * pivot_x -
+                    sine * transform_y * pivot_y,
+                position.y + sine * transform_x * pivot_x +
+                    cosine * transform_y * pivot_y
+            )
+        )
+    }
+
+    package func model(transform:@Transform, viewport:Math.Vec2) Math.Mat4 {
+        let affine = self.affine_model(transform, viewport)
+        return Math.Mat4(
+            Math.Vec4(affine.x.x, affine.x.y, 0.0, 0.0),
+            Math.Vec4(affine.y.x, affine.y.y, 0.0, 0.0),
+            Math.Vec4(0.0, 0.0, 1.0, 0.0),
+            Math.Vec4(
+                affine.translation.x,
+                affine.translation.y,
+                self.depth,
+                1.0
+            )
+        )
+    }
+
+    module func text_model(transform:@Transform, viewport:Math.Vec2) Math.Mat4 {
+        let position = self.placed_position(transform, viewport)
+        let scale_y = self.oriented_scale_y(transform.scale.y)
+        return Math.Mat4.transform(
+            Math.Vec3(position.x, position.y, 0.0),
+            Math.Quat.angle_axis(transform.rotation, Math.Vec3.back()).to_mat3(),
+            Math.Vec3(transform.scale.x, scale_y, 1.0)
+        )
+    }
+
+    module func text_size(content:Math.Vec2) Math.Vec2 {
+        let displayed = self.display_size()
+        return Math.Vec2(
+            content.x * displayed.x / self.drawing_width as float,
+            content.y * displayed.y / self.drawing_height as float
+        )
+    }
+
+    module func text_pivot(origin:Math.Vec2, content:Math.Vec2) Math.Vec2 {
+        let displayed = self.display_size()
+        let resolved_x = content.x * displayed.x / self.drawing_width as float
+        let resolved_y = content.y * displayed.y / self.drawing_height as float
+        if resolved_x <= 0.0 || resolved_y <= 0.0 { return Math.Vec2() }
+        let pivot_x = (self.pivot.x * displayed.x - origin.x * displayed.x /
+            self.drawing_width as float) / resolved_x
+        let pivot_y = (self.pivot.y * displayed.y - origin.y * displayed.y /
+            self.drawing_height as float) / resolved_y
+        return Math.Vec2(pivot_x, pivot_y)
+    }
+
+    private func placed_position(transform:@Transform, viewport:Math.Vec2) Math.Vec2 {
+        if self.space == Space.viewport {
+            return Math.Vec2(
+                viewport.x * self.anchor.x + transform.position.x,
+                viewport.y * self.anchor.y + transform.position.y
+            )
+        }
+        return transform.position
+    }
+
+    private func oriented_scale_y(value:float) float {
+        if self.space == Space.world { return -value }
+        return value
+    }
+}

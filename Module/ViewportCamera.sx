@@ -1,0 +1,212 @@
+use GFX.Application
+use GFX.Application.Plugin as PluginProtocol
+use GFX.Application.Schedule
+use GFX.ECS
+use GFX.Input
+use GFX.Input.Plugin as InputPlugin
+use GFX.Input.State as InputState
+use GFX.Scene2D.Camera
+use GFX.Scene2D.Plugin as ScenePlugin
+use GFX.Scene2D.Transform
+use STD.Math
+use STD.Time.Clock
+
+public struct Controls {
+    var pan:Input.MouseButton
+    var zoom_in:Input.Key
+    var zoom_out:Input.Key
+
+    init(
+        pan:Input.MouseButton = Input.MouseButton.middle,
+        zoom_in:Input.Key = Input.Key.page_up,
+        zoom_out:Input.Key = Input.Key.page_down
+    ) {
+        self.pan = pan
+        self.zoom_in = zoom_in
+        self.zoom_out = zoom_out
+    }
+}
+
+public class Controller {
+    private let settings:ViewportCamera.Settings
+    private let configured_controls:Controls
+    private var camera_entity:ECS.Entity
+    private var current_position:Math.Vec2
+    private var desired_position:Math.Vec2
+    private var current_zoom:float
+    private var desired_zoom:float
+    private var clock:Clock
+
+    init(settings:ViewportCamera.Settings = ViewportCamera.Settings()) {
+        validate(settings)
+        self.settings = settings
+        var controls = Controls()
+        if let configured = settings.controls { controls = configured }
+        self.configured_controls = controls
+        self.camera_entity = ECS.Entity()
+        self.current_position = settings.position
+        self.desired_position = settings.position
+        self.current_zoom = settings.zoom
+        self.desired_zoom = settings.zoom
+        self.clock = Clock()
+    }
+
+    func entity() ECS.Entity { return self.camera_entity }
+    func position() Math.Vec2 { return self.desired_position }
+    func zoom() float { return self.desired_zoom }
+    module func controls() Controls { return self.configured_controls }
+
+    func set_position(position:Math.Vec2) {
+        self.current_position = position
+        self.desired_position = position
+    }
+
+    func set_zoom(zoom:float) {
+        let clamped = Math.clamp(zoom, self.settings.min_zoom, self.settings.max_zoom)
+        self.current_zoom = clamped
+        self.desired_zoom = clamped
+    }
+
+    func pan(delta:Math.Vec2) { self.apply_pan(delta.x, delta.y) }
+
+    module func attach(entity:ECS.Entity) { self.camera_entity = entity }
+
+    func camera() Camera {
+        return Camera(
+            self.settings.active,
+            self.current_zoom,
+            self.settings.viewport_size,
+            self.settings.order
+        )
+    }
+
+    module func configure_camera(camera:&Camera) { camera.zoom = self.current_zoom }
+
+    module func apply_pan(mouse_x:float, mouse_y:float) {
+        if !self.settings.active { return }
+        let scale = self.settings.pan_sensitivity / self.desired_zoom
+        self.desired_position = self.desired_position.subtract(
+            Math.Vec2(mouse_x * scale, -mouse_y * scale)
+        )
+    }
+
+    module func zoom_wheel(delta:float) {
+        if !self.settings.active { return }
+        self.desired_zoom *= 1.0 + delta * self.settings.scroll_zoom_speed
+        self.clamp_zoom()
+    }
+
+    module func advance(zooming_in:bool, zooming_out:bool) {
+        if !self.settings.active { return }
+        var clock = self.clock
+        let dt = Math.clamp(clock.tick(), 0.0, self.settings.max_delta_time)
+        self.clock = clock
+        if zooming_in { self.desired_zoom += self.settings.zoom_speed * dt }
+        if zooming_out { self.desired_zoom -= self.settings.zoom_speed * dt }
+        self.clamp_zoom()
+        self.current_position = self.current_position.lerp(
+            self.desired_position,
+            smoothing_factor(self.settings.pan_response, dt)
+        )
+        self.current_zoom = Math.lerp(
+            self.current_zoom,
+            self.desired_zoom,
+            smoothing_factor(self.settings.zoom_response, dt)
+        )
+    }
+
+    func transform() Transform { return Transform(self.current_position) }
+
+    private func clamp_zoom() {
+        self.desired_zoom = Math.clamp(
+            self.desired_zoom,
+            self.settings.min_zoom,
+            self.settings.max_zoom
+        )
+    }
+}
+
+public struct ViewportCamera:PluginProtocol {
+    struct Settings {
+        var position:Math.Vec2 = Math.Vec2()
+        var zoom:float = 1.0
+        var min_zoom:float = 0.05
+        var max_zoom:float = 40.0
+        var zoom_speed:float = 2.0
+        var scroll_zoom_speed:float = 0.15
+        var pan_sensitivity:float = 1.0
+        var pan_response:float = 18.0
+        var zoom_response:float = 16.0
+        var max_delta_time:float = 0.05
+        var viewport_size:Math.Vec2 = Math.Vec2()
+        var order:int = 0
+        var active:bool = true
+        var controls:Controls? = null
+    }
+
+    private let settings:Settings
+
+    init(settings:Settings = Settings()) { self.settings = settings }
+
+    func id() str { return "GFX.Scene2D.ViewportCamera" }
+
+    func build(application:&Application) {
+        application.add_plugin(InputPlugin())
+        application.add_plugin(ScenePlugin())
+        application.add_resource(Controller(self.settings))
+        application.add_system(Schedule.startup, create_camera)
+        application.add_system(Schedule.update, update_camera)
+    }
+}
+
+func create_camera(controller:&Controller, world:&ECS.World) {
+    let entity = world.spawn(ECS.EntityRecipe()
+        ..with(controller.transform())
+        ..with(controller.camera())
+    )
+    controller.attach(entity)
+}
+
+func update_camera(controller:&Controller, world:&ECS.World, input:@InputState) {
+    let controls = controller.controls()
+    let mouse = input.mouse_delta()
+    let wheel = input.mouse_wheel()
+    controller.zoom_wheel(wheel.y)
+    if input.is_down(controls.pan) { controller.apply_pan(mouse.x, mouse.y) }
+    controller.advance(
+        input.is_down(controls.zoom_in),
+        input.is_down(controls.zoom_out)
+    )
+    let entity = controller.entity()
+    if world.is_alive(entity) {
+        var removed = world.remove<Transform>(entity)
+        if removed != null { world.insert(entity, controller.transform()) }
+        world.update<Camera>(entity, func(camera:&Camera) {
+            controller.configure_camera(camera)
+        })
+    }
+}
+
+func smoothing_factor(response:float, dt:float) float {
+    if response <= 0.0 || dt <= 0.0 { return 0.0 }
+    let scaled = response * dt
+    var power = 1.0 + scaled / 256.0
+    var iteration = 0
+    while iteration < 8 { power *= power; iteration++ }
+    return 1.0 - 1.0 / power
+}
+
+func validate(settings:ViewportCamera.Settings) {
+    if settings.min_zoom <= 0.0 || settings.max_zoom < settings.min_zoom {
+        panic("GFX.Scene2D.ViewportCamera requires a positive ordered zoom range")
+    }
+    if settings.zoom < settings.min_zoom || settings.zoom > settings.max_zoom {
+        panic("GFX.Scene2D.ViewportCamera initial zoom is outside its range")
+    }
+    if settings.pan_sensitivity <= 0.0 {
+        panic("GFX.Scene2D.ViewportCamera requires a positive pan sensitivity")
+    }
+    if settings.max_delta_time <= 0.0 {
+        panic("GFX.Scene2D.ViewportCamera requires a positive maximum delta time")
+    }
+}

@@ -1,0 +1,54 @@
+use GFX.Scene2D.Camera
+use GFX.Scene2D.Canvas as SceneCanvas
+use GFX.Scene2D.Grid
+use GFX.Scene2D.Sampling
+use GFX.Scene2D.Sprite
+use GFX.Scene2D.Transform
+use STD.Math
+use GFX.Canvas.Canvas as AuthoredCanvas
+
+test "name 2D concepts through their domain instead of their declarations" {
+    let transform = Transform(position:Math.Vec2(12.0, 8.0))
+    let camera = Camera(zoom:2.0)
+    let grid = Grid(spacing:0.5)
+    var drawing = SceneCanvas(AuthoredCanvas(), 16, 16)
+    var sprite = Sprite(size:Math.Vec2(32.0, 16.0))
+    sprite.sampling(Sampling.pixelated)
+
+    assert(transform.position == Math.Vec2(12.0, 8.0))
+    assert(camera.is_active())
+    assert(grid.spacing == 0.5)
+    assert(drawing.width() == 16)
+    assert(sprite.sampling() == Sampling.pixelated)
+}
+
+test "project positive world Y toward the top of the viewport" {
+    let camera = Camera()
+    let transform = Transform()
+    let viewport = Math.Vec2(100.0)
+    let center = camera.project(Math.Vec2(), transform, viewport)!
+    let above = camera.project(Math.Vec2(0.0, 10.0), transform, viewport)!
+
+    assert(center.nearly_equal(Math.Vec2(50.0)))
+    assert(above.y < center.y)
+}
+
+test "canvas model preserves 2D pivot scale rotation and depth" {
+    var drawing = SceneCanvas(AuthoredCanvas(), 20, 10)
+    drawing.size = Math.Vec2(40.0, 30.0)
+    drawing.pivot = Math.Vec2(0.25, 0.5)
+    drawing.depth = 0.75
+    let transform = Transform(
+        position:Math.Vec2(12.0, 8.0),
+        rotation:Math.pi() * 0.5,
+        scale:Math.Vec2(2.0, 3.0)
+    )
+    let model = drawing.model(transform, Math.Vec2(100.0))
+    let origin = model.multiply(Math.Vec4(0.0, 0.0, 0.0, 1.0))
+    let horizontal = model.multiply(Math.Vec4(1.0, 0.0, 0.0, 0.0))
+    let vertical = model.multiply(Math.Vec4(0.0, 1.0, 0.0, 0.0))
+
+    assert(origin.nearly_equal(Math.Vec4(-33.0, -12.0, 0.75, 1.0)))
+    assert(horizontal.nearly_equal(Math.Vec4(0.0, 4.0, 0.0, 0.0)))
+    assert(vertical.nearly_equal(Math.Vec4(9.0, 0.0, 0.0, 0.0)))
+}

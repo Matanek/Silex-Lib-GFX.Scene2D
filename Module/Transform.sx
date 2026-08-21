@@ -1,0 +1,29 @@
+use STD.Math
+
+public struct Transform {
+    var position:Math.Vec2
+    var rotation:float
+    var scale:Math.Vec2
+
+    init(
+        position:Math.Vec2 = Math.Vec2(),
+        rotation:float = 0.0,
+        scale:Math.Vec2 = Math.Vec2(1.0)
+    ) {
+        self.position = position
+        self.rotation = rotation
+        self.scale = scale
+    }
+
+    func matrix() Math.Mat4 {
+        return Math.Mat4.transform(
+            Math.Vec3(self.position.x, self.position.y, 0.0),
+            Math.Quat.angle_axis(self.rotation, Math.Vec3.back()).to_mat3(),
+            Math.Vec3(self.scale.x, self.scale.y, 1.0)
+        )
+    }
+
+    func view_matrix() Math.Mat4 {
+        return self.matrix().inverted()
+    }
+}
