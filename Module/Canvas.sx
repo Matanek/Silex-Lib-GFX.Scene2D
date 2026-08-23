@@ -79,6 +79,16 @@ public struct Canvas {
         let scale_y = transform_y * displayed.y / self.drawing_height as float
         let pivot_x = -self.pivot.x * displayed.x
         let pivot_y = -self.pivot.y * displayed.y
+        if transform.rotation == 0.0 {
+            return AffineModel(
+                x:Math.Vec2(scale_x, 0.0),
+                y:Math.Vec2(0.0, scale_y),
+                translation:Math.Vec2(
+                    position.x + transform_x * pivot_x,
+                    position.y + transform_y * pivot_y
+                )
+            )
+        }
         return AffineModel(
             x:Math.Vec2(cosine * scale_x, sine * scale_x),
             y:Math.Vec2(-sine * scale_y, cosine * scale_y),

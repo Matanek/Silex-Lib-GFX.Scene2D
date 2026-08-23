@@ -94,6 +94,9 @@ class Renderer {
     private var last_scene_cache_index:int
     private var image_cache:CachedImage[]
     private var scene_draws:SceneDraw[]
+    private var scene_draw_scratch:SceneDraw[]
+    private var scene_layer_counts:int[]
+    private var scene_layer_positions:int[]
     private var sprite_draws:SpriteDraw[]
     private var scene_entries:SceneEntry[]
     private var drawing_instances:GPU.Buffer? = null
@@ -116,6 +119,9 @@ class Renderer {
         self.last_scene_cache_index = -1
         self.image_cache = []
         self.scene_draws = []
+        self.scene_draw_scratch = []
+        self.scene_layer_counts = []
+        self.scene_layer_positions = []
         self.sprite_draws = []
         self.scene_entries = []
         self.drawing_instance_capacity = 0
@@ -344,8 +350,12 @@ class Renderer {
     }
 
     func finish_prepare(device:@GPU.Device) {
-        sort_scene_draws(self.scene_draws)
-        sort_sprite_draws(self.sprite_draws)
+        sort_scene_draws(
+            self.scene_draws,
+            self.scene_draw_scratch,
+            self.scene_layer_counts,
+            self.scene_layer_positions
+        )
         self.rebuild_scene_entries()
         self.prepare_scene_instances(device)
     }
@@ -607,30 +617,38 @@ class Renderer {
 
     private func rebuild_scene_entries() {
         self.scene_entries.clear()
-        var drawing_index = 0
-        var sprite_index = 0
-        while drawing_index < self.scene_draws.count() ||
-            sprite_index < self.sprite_draws.count()
-        {
-            if drawing_index >= self.scene_draws.count() {
-                let draw = self.sprite_draws[sprite_index]
-                self.scene_entries.append(scene_entry(1, sprite_index, draw))
-                sprite_index++
-            } else if sprite_index >= self.sprite_draws.count() {
-                let draw = self.scene_draws[drawing_index]
-                self.scene_entries.append(drawing_entry(drawing_index, draw))
-                drawing_index++
-            } else {
-                let drawing = self.scene_draws[drawing_index]
-                let sprite = self.sprite_draws[sprite_index]
-                if scene_draw_before_sprite(drawing, sprite) {
-                    self.scene_entries.append(drawing_entry(drawing_index, drawing))
-                    drawing_index++
-                } else {
-                    self.scene_entries.append(scene_entry(1, sprite_index, sprite))
-                    sprite_index++
-                }
+        self.append_scene_entries(false)
+        let viewport_start = self.scene_entries.count()
+        self.append_scene_entries(true)
+        sort_scene_entries(self.scene_entries, 0, viewport_start)
+        sort_scene_entries(
+            self.scene_entries,
+            viewport_start,
+            self.scene_entries.count()
+        )
+    }
+
+    private func append_scene_entries(viewport:bool) {
+        var index = 0
+        while index < self.scene_draws.count() {
+            if self.scene_draws[index].viewport == viewport {
+                self.scene_entries.append(drawing_entry(
+                    index,
+                    self.scene_draws[index]
+                ))
             }
+            index++
+        }
+        index = 0
+        while index < self.sprite_draws.count() {
+            if self.sprite_draws[index].viewport == viewport {
+                self.scene_entries.append(scene_entry(
+                    1,
+                    index,
+                    self.sprite_draws[index]
+                ))
+            }
+            index++
         }
     }
 
@@ -727,7 +745,8 @@ local func normalized_region(image:@Image, selected:Image.Region?) Math.Vec4 {
     return Math.Vec4(0.0, 0.0, 1.0, 1.0)
 }
 
-local func scene_draw_before(left:SceneDraw, right:SceneDraw) bool {
+local func scene_draw_before(left:@SceneDraw, right:@SceneDraw) bool {
+    if left.viewport != right.viewport { return !left.viewport }
     if left.layer != right.layer { return left.layer < right.layer }
     if left.depth != right.depth { return left.depth < right.depth }
     return left.order < right.order
@@ -741,19 +760,54 @@ local func world_image_model(transform:@Transform) Math.Mat4 {
     )
 }
 
-local func sprite_draw_before(left:SpriteDraw, right:SpriteDraw) bool {
+local func sprite_draw_before(left:@SpriteDraw, right:@SpriteDraw) bool {
     if left.layer != right.layer { return left.layer < right.layer }
     if left.depth != right.depth { return left.depth < right.depth }
     return left.order < right.order
 }
 
-local func scene_draw_before_sprite(left:SceneDraw, right:SpriteDraw) bool {
+local func scene_draw_before_sprite(left:@SceneDraw, right:@SpriteDraw) bool {
     if left.layer != right.layer { return left.layer < right.layer }
     if left.depth != right.depth { return left.depth < right.depth }
     return left.order < right.order
 }
 
-local func sort_scene_draws(draws:&SceneDraw[]) {
+local func scene_entry_before(left:@SceneEntry, right:@SceneEntry) bool {
+    if left.layer != right.layer { return left.layer < right.layer }
+    if left.depth != right.depth { return left.depth < right.depth }
+    return left.order < right.order
+}
+
+local func sort_scene_entries(entries:&SceneEntry[], start:int, end:int) {
+    var ordered = start + 1
+    while ordered < end &&
+        !scene_entry_before(entries[ordered], entries[ordered - 1])
+    {
+        ordered++
+    }
+    if ordered == end { return }
+    var index = ordered
+    while index < end {
+        let selected = entries[index]
+        var cursor = index
+        while cursor > start &&
+            scene_entry_before(selected, entries[cursor - 1])
+        {
+            entries[cursor] = entries[cursor - 1]
+            cursor--
+        }
+        entries[cursor] = selected
+        index++
+    }
+}
+
+local func sort_scene_draws(
+    draws:&SceneDraw[],
+    scratch:&SceneDraw[],
+    counts:&int[],
+    positions:&int[]
+) {
+    if draws.count() < 2 { return }
     var ordered = 1
     while ordered < draws.count() &&
         !scene_draw_before(draws[ordered], draws[ordered - 1])
@@ -761,14 +815,81 @@ local func sort_scene_draws(draws:&SceneDraw[]) {
         ordered++
     }
     if ordered == draws.count() { return }
-    var index = 1
-    while index < draws.count() {
-        var cursor = index
-        while cursor > 0 && scene_draw_before(draws[cursor], draws[cursor - 1]) {
-            draws.swap(cursor, cursor - 1)
-            cursor--
+
+    var minimum_layer = draws[0].layer
+    var maximum_layer = draws[0].layer
+    for draw in draws {
+        if draw.layer < minimum_layer { minimum_layer = draw.layer }
+        if draw.layer > maximum_layer { maximum_layer = draw.layer }
+    }
+    let maximum_linear_range = draws.count() * 4 + 256
+    if maximum_layer - minimum_layer <= maximum_linear_range {
+        let layer_range = maximum_layer - minimum_layer + 1
+        let bucket_count = layer_range * 2
+        scratch.clear()
+        counts.clear()
+        positions.clear()
+        while counts.count() < bucket_count { counts.append(0) }
+        for draw in draws {
+            scratch.append(draw)
+            var bucket = draw.layer - minimum_layer
+            if draw.viewport { bucket += layer_range }
+            counts[bucket]++
         }
-        index++
+        var running = 0
+        var bucket = 0
+        while bucket < bucket_count {
+            positions.append(running)
+            running += counts[bucket]
+            bucket++
+        }
+        for draw in scratch {
+            bucket = draw.layer - minimum_layer
+            if draw.viewport { bucket += layer_range }
+            let destination = positions[bucket]
+            draws[destination] = draw
+            positions[bucket]++
+        }
+        ordered = 1
+        while ordered < draws.count() &&
+            !scene_draw_before(draws[ordered], draws[ordered - 1])
+        {
+            ordered++
+        }
+        if ordered == draws.count() { return }
+    }
+    quick_sort_scene_draws(draws, 0, draws.count() - 1)
+}
+
+local func quick_sort_scene_draws(
+    draws:&SceneDraw[],
+    first:int,
+    last:int
+) {
+    var low = first
+    var high = last
+    while low < high {
+        let pivot = draws[low + (high - low) / 2]
+        var left = low
+        var right = high
+        while left <= right {
+            while scene_draw_before(draws[left], pivot) { left++ }
+            while scene_draw_before(pivot, draws[right]) { right-- }
+            if left <= right {
+                draws.swap(left, right)
+                left++
+                right--
+            }
+        }
+        // Recurse into the smaller partition and continue with the larger
+        // one so stack usage remains logarithmic even for ordered scenes.
+        if right - low < high - left {
+            if low < right { quick_sort_scene_draws(draws, low, right) }
+            low = left
+        } else {
+            if left < high { quick_sort_scene_draws(draws, left, high) }
+            high = right
+        }
     }
 }
 

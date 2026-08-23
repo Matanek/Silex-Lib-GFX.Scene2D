@@ -17,6 +17,15 @@ func identical_drawing() Canvas {
     })
 }
 
+func circle_drawing() Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(8.0), 7.0),
+            Canvas.Fill.solid(Color.white())
+        )
+    })
+}
+
 func create_identical_geometry(world:&ECS.World) {
     world.spawn(ECS.EntityRecipe()
         ..with(Components.Transform2D(position:Math.Vec2(-10.0, 0.0)))
@@ -40,6 +49,36 @@ func require_automatic_batch(
     controller.stop()
 }
 
+func create_interleaved_layers(world:&ECS.World) {
+    var index = 0
+    while index < 8 {
+        let even = index % 2 == 0
+        var drawing = circle_drawing()
+        var layer = 2
+        if even {
+            drawing = identical_drawing()
+            layer = 1
+        }
+        world.spawn(ECS.EntityRecipe()
+            ..with(Components.Transform2D(position:Math.Vec2(index as float, 0.0)))
+            ..with(Components.Canvas(drawing, 16, 16)
+                ..layer = layer
+            )
+        )
+        index++
+    }
+}
+
+func require_layer_batches(
+    renderer:@Rendering.Renderer,
+    controller:&Application.Controller
+) {
+    assert(renderer.stats().draw_calls() == 2)
+    assert(renderer.stats().pipeline_bindings() == 2)
+    assert(renderer.stats().instances() == 8)
+    controller.stop()
+}
+
 test "batch equivalent Canvas geometry without shared application state" {
     var application = Application()
     application.add_plugin(WindowPlugin(WindowPlugin.Settings()
@@ -52,5 +91,20 @@ test "batch equivalent Canvas geometry without shared application state" {
     application.add_plugin(Scene2D.Plugin())
     application.add_system(Application.Schedule.startup, create_identical_geometry)
     application.add_after_system(Application.Schedule.render, require_automatic_batch)
+    assert(application.run() == 0)
+}
+
+test "batch interleaved Canvas geometry after layer ordering" {
+    var application = Application()
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D interleaved layer batching"
+        ..width = 64
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_interleaved_layers)
+    application.add_after_system(Application.Schedule.render, require_layer_batches)
     assert(application.run() == 0)
 }
