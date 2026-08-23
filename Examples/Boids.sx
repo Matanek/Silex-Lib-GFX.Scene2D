@@ -3,6 +3,7 @@ use GFX.Color
 use GFX.Canvas
 use GFX.Components
 use GFX.ECS
+use GFX.GPU
 use GFX.Plugins
 use GFX.Resources
 use STD.Math
@@ -245,7 +246,10 @@ func benchmark(benchmark:&Benchmark, controller:&Application.Controller) {
     benchmark.elapsed += delta
     benchmark.frames++
     if benchmark.elapsed >= 5.0 {
-        print("SILEX_GFX_BOIDS count=$(Constants.boid_count) fps=$(benchmark.frames as float / benchmark.elapsed)")
+        print(
+            "SILEX_GFX_BOIDS count=$(Constants.boid_count) present=immediate " +
+            "fps=$(benchmark.frames as float / benchmark.elapsed)"
+        )
         controller.stop()
     }
 }
@@ -289,12 +293,18 @@ func move_flock(
 }
 
 func main() {
+    let benchmark_requested = option_requested("--benchmark")
     var application = Application()
 
     // Keep the historical switch to compare the parallel query path with its
     // single-worker baseline when investigating scheduler performance.
     if option_requested("--one-worker") {
         application = Application(1)
+    }
+    if benchmark_requested {
+        application.add_plugin(Plugins.GPU(Plugins.GPU.Settings()
+            ..surface = GPU.SurfaceSettings(present_mode:GPU.PresentMode.immediate)
+        ))
     }
 
     application
@@ -313,7 +323,6 @@ func main() {
         ..add_system(Application.Schedule.update, capture_flock)
         ..add_system(Application.Schedule.update, move_flock)
 
-    let benchmark_requested = option_requested("--benchmark")
     if !benchmark_requested {
         application.add_plugin(Plugins.FPSPanel())
     }

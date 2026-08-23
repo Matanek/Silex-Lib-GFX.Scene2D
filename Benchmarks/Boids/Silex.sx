@@ -3,6 +3,7 @@ use GFX.Canvas
 use GFX.Color
 use GFX.Components
 use GFX.ECS
+use GFX.GPU
 use GFX.Plugins
 use GFX.Resources
 use STD.Math
@@ -310,7 +311,8 @@ func measure(
     benchmark.frames++
     if benchmark.elapsed >= 5.0 {
         print(
-            "SILEX_GFX_BOIDS count=$(settings.count) fps=$(benchmark.frames as float / benchmark.elapsed) " +
+            "SILEX_GFX_BOIDS count=$(settings.count) present=immediate " +
+            "fps=$(benchmark.frames as float / benchmark.elapsed) " +
             "window=$(window.size().x)x$(window.size().y) " +
             "pixels=$(window.pixel_size().x)x$(window.pixel_size().y) " +
             "scale=$(window.display_scale()) density=$(window.pixel_density())"
@@ -330,6 +332,9 @@ func main() {
             ..height = 640
             ..resizable = false
             ..high_pixel_density = true
+        ))
+        ..add_plugin(Plugins.GPU(Plugins.GPU.Settings()
+            ..surface = GPU.SurfaceSettings(present_mode:GPU.PresentMode.immediate)
         ))
         ..add_plugin(Plugins.Rendering(Plugins.Rendering.Settings()
             ..clear = Color.black()
