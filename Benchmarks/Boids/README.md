@@ -4,9 +4,11 @@ This directory contains the two witnesses used to compare the cost of GFX's
 public Scene2D path with a C++23 implementation that calls SDL3 directly.
 
 Both programs preserve the same quadratic algorithm, one flock snapshot per
-frame, the same simulation constants, a 960 × 640 logical window, and a
+frame, the same simulation constants, a 960 × 640 logical window requesting a
+high-density framebuffer, immediate presentation without VSync, and a
 five-second measurement period. Pass `4000` explicitly to both executables for
-a valid comparison.
+a valid comparison. Always compare the reported logical and pixel dimensions;
+a run whose presentation mode or dimensions differ is invalid.
 
 ## Silex/GFX
 
@@ -22,7 +24,7 @@ Silex/Toolchain/zig-out/bin/silex compile \
 The output has this form:
 
 ```text
-SILEX_GFX_BOIDS count=4000 fps=80.0 window=960.0x640.0 pixels=1920.0x1280.0 scale=2.0 density=2.0
+SILEX_GFX_BOIDS count=4000 present=immediate fps=80.0 window=960.0x640.0 pixels=1920.0x1280.0 scale=2.0 density=2.0
 ```
 
 ## C++23/SDL3
@@ -42,7 +44,7 @@ cmake --build /private/tmp/gfx-boids-cpp --config Release
 The output has this form:
 
 ```text
-CPP_SDL_BOIDS count=4000 fps=86.0
+CPP_SDL_BOIDS count=4000 present=immediate fps=86.0 window=960x640 pixels=1920x1280 scale=2.0 density=2.0
 ```
 
 ## Comparison protocol

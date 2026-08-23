@@ -23,6 +23,8 @@ constexpr float k_maximumSpeed = 105.0F;
 constexpr float k_maximumSteering = 140.0F;
 constexpr float k_halfWidth = 490.0F;
 constexpr float k_halfHeight = 330.0F;
+constexpr int k_windowWidth = 960;
+constexpr int k_windowHeight = 640;
 constexpr float k_neighborhoodRadiusSquared =
     k_neighborhoodRadius * k_neighborhoodRadius;
 constexpr float k_separationRadiusSquared =
@@ -138,8 +140,10 @@ void renderBoid(SDL_Renderer* renderer, const Boid& boid, int index) {
     for (std::size_t vertex = 0; vertex < vertices.size(); ++vertex) {
         const Vector2 point = k_shape[vertex];
         vertices[vertex].position = {
-            480.0F + boid.position.x + point.x * cosine - point.y * sine,
-            320.0F + boid.position.y + point.x * sine + point.y * cosine
+            static_cast<float>(k_windowWidth) * 0.5F + boid.position.x
+                + point.x * cosine - point.y * sine,
+            static_cast<float>(k_windowHeight) * 0.5F + boid.position.y
+                + point.x * sine + point.y * cosine
         };
         vertices[vertex].color = k_colors[static_cast<std::size_t>(index % 3)];
     }
@@ -175,16 +179,51 @@ int main(int argc, char** argv) {
     SDL_Renderer* renderer = nullptr;
     if (!SDL_CreateWindowAndRenderer(
         "C++ SDL Boids",
-        960,
-        640,
-        0,
+        k_windowWidth,
+        k_windowHeight,
+        SDL_WINDOW_HIGH_PIXEL_DENSITY,
         &window,
         &renderer
     )) {
         SDL_Quit();
         return EXIT_FAILURE;
     }
-    SDL_SetRenderVSync(renderer, 1);
+    if (!SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED)
+        || !SDL_SetRenderLogicalPresentation(
+            renderer,
+            k_windowWidth,
+            k_windowHeight,
+            SDL_LOGICAL_PRESENTATION_STRETCH
+        )) {
+        std::fprintf(
+            stderr,
+            "Could not configure immediate high-density rendering: %s\n",
+            SDL_GetError()
+        );
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int pixelWidth = 0;
+    int pixelHeight = 0;
+    if (!SDL_GetWindowSize(window, &windowWidth, &windowHeight)
+        || !SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight)) {
+        std::fprintf(
+            stderr,
+            "Could not query benchmark window dimensions: %s\n",
+            SDL_GetError()
+        );
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+    const float displayScale = SDL_GetWindowDisplayScale(window);
+    const float pixelDensity = SDL_GetWindowPixelDensity(window);
 
     std::mt19937 randomizer { 0x511E801D };
     std::uniform_real_distribution<float> xPosition { -k_halfWidth, k_halfWidth };
@@ -238,9 +277,16 @@ int main(int argc, char** argv) {
 
     const float seconds = std::chrono::duration<float>(Clock::now() - start).count();
     std::printf(
-        "CPP_SDL_BOIDS count=%d fps=%.5f\n",
+        "CPP_SDL_BOIDS count=%d present=immediate fps=%.5f "
+        "window=%dx%d pixels=%dx%d scale=%.5f density=%.5f\n",
         count,
-        static_cast<double>(frames) / seconds
+        static_cast<double>(frames) / seconds,
+        windowWidth,
+        windowHeight,
+        pixelWidth,
+        pixelHeight,
+        static_cast<double>(displayScale),
+        static_cast<double>(pixelDensity)
     );
 
     SDL_DestroyRenderer(renderer);
