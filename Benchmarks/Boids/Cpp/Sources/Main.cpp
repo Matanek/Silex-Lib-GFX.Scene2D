@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     if (!SDL_CreateWindowAndRenderer(
-        "C++ SDL Boids",
+        "C++ Direct SDL Boids",
         k_windowWidth,
         k_windowHeight,
         SDL_WINDOW_HIGH_PIXEL_DENSITY,
@@ -277,7 +277,7 @@ int main(int argc, char** argv) {
 
     const float seconds = std::chrono::duration<float>(Clock::now() - start).count();
     std::printf(
-        "CPP_SDL_BOIDS count=%d present=immediate fps=%.5f "
+        "CPP_DIRECT_BOIDS count=%d present=immediate fps=%.5f "
         "window=%dx%d pixels=%dx%d scale=%.5f density=%.5f\n",
         count,
         static_cast<double>(frames) / seconds,
