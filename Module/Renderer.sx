@@ -356,7 +356,11 @@ class Renderer {
             self.scene_layer_counts,
             self.scene_layer_positions
         )
-        self.rebuild_scene_entries()
+        if self.sprite_draws.is_empty() {
+            self.scene_entries.clear()
+        } else {
+            self.rebuild_scene_entries()
+        }
         self.prepare_scene_instances(device)
     }
 
@@ -384,6 +388,10 @@ class Renderer {
 
     private func draw_scene(pass:@GPU.RenderPass) {
         if !self.camera_ready { return }
+        if self.sprite_draws.is_empty() {
+            self.draw_scene_drawings(pass)
+            return
+        }
         var cursor = 0
         while cursor < self.scene_entries.count() {
             let entry = self.scene_entries[cursor]
@@ -427,6 +435,38 @@ class Renderer {
                 self.draw_scene_sprite(pass, self.sprite_draws[entry.index])
                 cursor++
             }
+        }
+    }
+
+    private func draw_scene_drawings(pass:@GPU.RenderPass) {
+        var cursor = 0
+        while cursor < self.scene_draws.count() {
+            let draw = self.scene_draws[cursor]
+            var cache = self.scene_drawing_cache[draw.cache]
+            var end = cursor + 1
+            while end < self.scene_draws.count() &&
+                self.scene_draws[end].cache == draw.cache &&
+                self.scene_draws[end].viewport == draw.viewport
+            {
+                end++
+            }
+            if cache.vertex_count > 0 {
+                if let pipeline = self.drawing_pipeline {
+                    if let vertices = cache.vertices {
+                        if let instances = self.drawing_instances {
+                            var selected_projection = self.scene_view_projection
+                            if draw.viewport { selected_projection = self.projection }
+                            var projection = Packing.view_projection(selected_projection)
+                            pass.bind(pipeline)
+                            pass.vertex_uniform(0, projection, 64)
+                            pass.vertex_buffer(0, vertices)
+                            pass.vertex_buffer(1, instances)
+                            pass.draw(cache.vertex_count, end - cursor, 0, cursor)
+                        }
+                    }
+                }
+            }
+            cursor = end
         }
     }
 

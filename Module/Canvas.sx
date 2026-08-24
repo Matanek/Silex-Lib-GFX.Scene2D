@@ -71,12 +71,21 @@ public struct Canvas {
     module func affine_model(transform:@Transform, viewport:Math.Vec2) AffineModel {
         let displayed = self.display_size()
         let position = self.placed_position(transform, viewport)
-        let cosine = Math.cos(transform.rotation)
-        let sine = Math.sin(transform.rotation)
         let transform_x = transform.scale.x
         let transform_y = self.oriented_scale_y(transform.scale.y)
-        let scale_x = transform_x * displayed.x / self.drawing_width as float
-        let scale_y = transform_y * displayed.y / self.drawing_height as float
+        let resized = self.size.x > 0.0 && self.size.y > 0.0
+        let scale_x = affine_scale(
+            transform_x,
+            displayed.x,
+            self.drawing_width,
+            resized
+        )
+        let scale_y = affine_scale(
+            transform_y,
+            displayed.y,
+            self.drawing_height,
+            resized
+        )
         let pivot_x = -self.pivot.x * displayed.x
         let pivot_y = -self.pivot.y * displayed.y
         if transform.rotation == 0.0 {
@@ -89,6 +98,8 @@ public struct Canvas {
                 )
             )
         }
+        let cosine = Math.cos(transform.rotation)
+        let sine = Math.sin(transform.rotation)
         return AffineModel(
             x:Math.Vec2(cosine * scale_x, sine * scale_x),
             y:Math.Vec2(-sine * scale_y, cosine * scale_y),
@@ -160,4 +171,14 @@ public struct Canvas {
         if self.space == Space.world { return -value }
         return value
     }
+}
+
+local func affine_scale(
+    transform:float,
+    displayed:float,
+    authored:int,
+    resized:bool
+) float {
+    if resized { return transform * displayed / authored as float }
+    return transform
 }
