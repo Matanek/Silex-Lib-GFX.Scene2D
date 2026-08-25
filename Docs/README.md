@@ -35,6 +35,11 @@ come from distinct authored Canvas objects. Per-entity color, layer, pivot, and
 size remain independent without requiring a batching API or shared-cache
 ceremony in application code.
 
+`Canvas.replace(...)` is also incremental. A changing Canvas reuses one
+per-entity GPU geometry allocation, and unchanged text keeps both its glyph
+coverage and uploaded texture. Dragging a control therefore does not grow the
+renderer caches or rerasterize every static label around it.
+
 ```silex
 use GFX.Canvas
 use GFX.Color

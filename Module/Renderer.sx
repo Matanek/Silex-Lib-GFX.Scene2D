@@ -16,19 +16,51 @@ use STD.Collections.Hashing
 use STD.Math
 
 class CachedSceneDrawing {
-    let geometry_hash:uint
-    let packed_vertices:str
+    var snapshot_id:int
+    var geometry_hash:uint
+    var packed_vertices:str
     var vertices:GPU.Buffer? = null
     var upload:GPU.TransferBuffer? = null
-    let vertex_count:int
+    var vertex_count:int
+    var vertex_capacity:int
+    var dirty:bool
+    let mutable:bool
 
-    init(geometry_hash:uint, packed_vertices:str, vertex_count:int) {
+    init(
+        snapshot_id:int,
+        geometry_hash:uint,
+        packed_vertices:str,
+        vertex_count:int,
+        mutable:bool = false
+    ) {
+        self.snapshot_id = snapshot_id
         self.geometry_hash = geometry_hash
         self.packed_vertices = packed_vertices
         self.vertex_count = vertex_count
+        self.vertex_capacity = 0
+        self.dirty = true
+        self.mutable = mutable
     }
 
     func bytes() str { return self.packed_vertices }
+
+    func replace(
+        snapshot_id:int,
+        geometry_hash:uint,
+        packed_vertices:str,
+        vertex_count:int
+    ) {
+        self.snapshot_id = snapshot_id
+        if self.geometry_hash == geometry_hash &&
+            self.packed_vertices == packed_vertices
+        {
+            return
+        }
+        self.geometry_hash = geometry_hash
+        self.packed_vertices = packed_vertices
+        self.vertex_count = vertex_count
+        self.dirty = true
+    }
 }
 
 class CachedImage {
@@ -80,7 +112,7 @@ struct SceneEntry {
     let order:int
 }
 
-class Renderer {
+package class Renderer {
     private var drawing_pipeline:GPU.GraphicsPipeline? = null
     private var sprite_pipeline:GPU.GraphicsPipeline? = null
     private var grid_pipeline:GPU.GraphicsPipeline? = null
@@ -90,6 +122,7 @@ class Renderer {
     private var quad_indices:GPU.Buffer? = null
     private var scene_drawing_cache:CachedSceneDrawing[]
     private var scene_drawing_snapshots:Dictionary<int, int>
+    private var mutable_scene_drawings:Dictionary<int, int>
     private var last_scene_snapshot_id:int
     private var last_scene_cache_index:int
     private var image_cache:CachedImage[]
@@ -115,6 +148,7 @@ class Renderer {
     init() {
         self.scene_drawing_cache = []
         self.scene_drawing_snapshots = Dictionary<int, int>(minimum_capacity:256)
+        self.mutable_scene_drawings = Dictionary<int, int>(minimum_capacity:64)
         self.last_scene_snapshot_id = -1
         self.last_scene_cache_index = -1
         self.image_cache = []
@@ -269,13 +303,18 @@ class Renderer {
     ) {
         if !canvas.visible { return }
         let snapshot_id = canvas.snapshot_id()
-        var cache_index = self.known_scene_drawing_cache(snapshot_id)
-        if cache_index < 0 {
-            var snapshot = canvas.snapshot()
-            cache_index = self.register_scene_drawing(snapshot)
+        var snapshot = canvas.snapshot()
+        var cache_index = -1
+        if canvas.revision() > 1 {
+            cache_index = self.mutable_scene_drawing(entity.index, snapshot)
+        } else {
+            cache_index = self.known_scene_drawing_cache(snapshot_id)
+            if cache_index < 0 {
+                cache_index = self.register_scene_drawing(snapshot)
+            }
         }
         var cache = self.scene_drawing_cache[cache_index]
-        if cache.vertices == null { self.refresh_scene_geometry(device, cache) }
+        self.refresh_scene_geometry(device, cache)
         let model = canvas.affine_model(transform, self.viewport)
         self.scene_draws.append(SceneDraw(
             cache:cache_index,
@@ -289,14 +328,17 @@ class Renderer {
             viewport:canvas.uses_viewport()
         ))
         if canvas.has_text() {
-            var snapshot = canvas.snapshot()
             let text = snapshot.text_layer(self.display_scale)
             let scale_key = Math.round(self.display_scale * 1000.0) as int
-            var image_cache = self.cache_for_image(1, snapshot.id(), scale_key)
+            var image_cache = self.cache_for_image(
+                1,
+                snapshot.text_revision(),
+                scale_key
+            )
             self.refresh_image(
                 device,
                 image_cache,
-                canvas.revision(),
+                snapshot.text_revision(),
                 text.image,
                 "GFX.Scene2D canvas text"
             )
@@ -525,7 +567,7 @@ class Renderer {
         var index = 0
         while index < self.scene_drawing_cache.count() {
             var cache = self.scene_drawing_cache[index]
-            if cache.geometry_hash == geometry_hash &&
+            if !cache.mutable && cache.geometry_hash == geometry_hash &&
                 cache.packed_vertices == packed
             {
                 self.scene_drawing_snapshots.set(snapshot_id, index)
@@ -536,6 +578,7 @@ class Renderer {
             index++
         }
         var created = CachedSceneDrawing(
+            snapshot_id,
             geometry_hash,
             packed,
             geometry.vertex_count()
@@ -548,29 +591,70 @@ class Renderer {
         return created_index
     }
 
+    private func mutable_scene_drawing(entity_index:int, snapshot:@Snapshot) int {
+        if self.mutable_scene_drawings.contains(entity_index) {
+            let cache_index:int = self.mutable_scene_drawings.get(entity_index) + 0
+            var cache = self.scene_drawing_cache[cache_index]
+            if cache.snapshot_id != snapshot.id() {
+                let geometry = snapshot.geometry()
+                let packed = Packing.drawing_vertices(geometry)
+                cache.replace(
+                    snapshot.id(),
+                    Hashing.hash(packed),
+                    packed,
+                    geometry.vertex_count()
+                )
+            }
+            return cache_index
+        }
+        let geometry = snapshot.geometry()
+        let packed = Packing.drawing_vertices(geometry)
+        var created = CachedSceneDrawing(
+            snapshot.id(),
+            Hashing.hash(packed),
+            packed,
+            geometry.vertex_count(),
+            mutable:true
+        )
+        self.scene_drawing_cache.append(created)
+        let cache_index = self.scene_drawing_cache.count() - 1
+        self.mutable_scene_drawings.set(entity_index, cache_index)
+        return cache_index
+    }
+
     private func refresh_scene_geometry(
         device:@GPU.Device,
         cache:&CachedSceneDrawing
     ) {
-        if cache.vertices != null { return }
-        if cache.vertex_count == 0 { return }
+        if !cache.dirty { return }
+        if cache.vertex_count == 0 { cache.dirty = false; return }
         let byte_count = cache.vertex_count * 36
-        cache.upload = device.upload_buffer(
-            byte_count,
-            "GFX.Scene2D retained drawing upload"
-        )
-        cache.vertices = device.buffer(GPU.BufferSettings(
-            size:byte_count,
-            usage:GPU.BufferUsage.vertex(),
-            name:"GFX.Scene2D retained drawing vertices"
-        ))
+        if cache.vertices == null || cache.vertex_capacity < byte_count {
+            cache.upload = device.upload_buffer(
+                byte_count,
+                "GFX.Scene2D retained drawing upload"
+            )
+            cache.vertices = device.buffer(GPU.BufferSettings(
+                size:byte_count,
+                usage:GPU.BufferUsage.vertex(),
+                name:"GFX.Scene2D retained drawing vertices"
+            ))
+            cache.vertex_capacity = byte_count
+        }
         if let upload = cache.upload {
             if let destination = cache.vertices {
-                upload.write_packed(cache.bytes(), byte_count)
+                upload.write_packed(cache.bytes(), byte_count, cycle:true)
                 copy_buffer(device, upload, destination, byte_count)
             }
         }
+        cache.dirty = false
     }
+
+    package func drawing_cache_count() int {
+        return self.scene_drawing_cache.count()
+    }
+
+    package func image_cache_count() int { return self.image_cache.count() }
 
     private func cache_for_image(kind:int, index:int, generation:int) CachedImage {
         var cache_index = 0

@@ -5,6 +5,7 @@ use GFX.Components
 use GFX.ECS
 use GFX.Rendering
 use GFX.Scene2D
+use GFX.Scene2D.Renderer
 use GFX.Window.Plugin as WindowPlugin
 use STD.Math
 
@@ -79,6 +80,50 @@ func require_layer_batches(
     controller.stop()
 }
 
+class MutableCanvasCase {
+    var entity:ECS.Entity? = null
+    var updates:int = 0
+}
+
+func mutable_drawing(value:float) Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(value, 8.0), 4.0),
+            Canvas.Fill.solid(Color.cyan_400())
+        )
+        painter.text("Stable text", Math.Vec2(2.0, 2.0))
+    })
+}
+
+func create_mutable_geometry(world:&ECS.World, state:&MutableCanvasCase) {
+    state.entity = world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(mutable_drawing(4.0), 64, 16))
+    )
+}
+
+func update_mutable_geometry(world:&ECS.World, state:&MutableCanvasCase) {
+    if let entity = state.entity {
+        let x = 4.0 + (state.updates % 48) as float
+        var drawing = mutable_drawing(x)
+        world.update<Components.Canvas>(entity, func(canvas:&Components.Canvas) {
+            canvas.replace(drawing)
+        })
+        state.updates++
+    }
+}
+
+func require_bounded_mutable_cache(
+    renderer:@Renderer,
+    state:@MutableCanvasCase,
+    controller:&Application.Controller
+) {
+    if state.updates < 32 { return }
+    assert(renderer.drawing_cache_count() <= 2)
+    assert(renderer.image_cache_count() == 1)
+    controller.stop()
+}
+
 test "batch equivalent Canvas geometry without shared application state" {
     var application = Application()
     application.add_plugin(WindowPlugin(WindowPlugin.Settings()
@@ -106,5 +151,25 @@ test "batch interleaved Canvas geometry after layer ordering" {
     application.add_plugin(Scene2D.Plugin())
     application.add_system(Application.Schedule.startup, create_interleaved_layers)
     application.add_after_system(Application.Schedule.render, require_layer_batches)
+    assert(application.run() == 0)
+}
+
+test "reuse one GPU geometry cache while a Canvas changes" {
+    var application = Application()
+    application.add_resource(MutableCanvasCase())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D mutable Canvas cache"
+        ..width = 64
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_mutable_geometry)
+    application.add_system(Application.Schedule.update, update_mutable_geometry)
+    application.add_after_system(
+        Application.Schedule.render,
+        require_bounded_mutable_cache
+    )
     assert(application.run() == 0)
 }
