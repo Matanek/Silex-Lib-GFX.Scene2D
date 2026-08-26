@@ -303,18 +303,15 @@ package class Renderer {
     ) {
         if !canvas.visible { return }
         let snapshot_id = canvas.snapshot_id()
-        var snapshot = canvas.snapshot()
-        var cache_index = -1
-        if canvas.revision() > 1 {
-            cache_index = self.mutable_scene_drawing(entity.index, snapshot)
-        } else {
-            cache_index = self.known_scene_drawing_cache(snapshot_id)
-            if cache_index < 0 {
-                cache_index = self.register_scene_drawing(snapshot)
-            }
+        var cache_index = self.known_scene_drawing_cache(snapshot_id)
+        if cache_index < 0 {
+            cache_index = self.resolve_scene_drawing_cache(
+                device,
+                entity.index,
+                canvas
+            )
         }
         var cache = self.scene_drawing_cache[cache_index]
-        self.refresh_scene_geometry(device, cache)
         let model = canvas.affine_model(transform, self.viewport)
         self.scene_draws.append(SceneDraw(
             cache:cache_index,
@@ -328,31 +325,40 @@ package class Renderer {
             viewport:canvas.uses_viewport()
         ))
         if canvas.has_text() {
-            let scale_key = Math.round(self.display_scale * 1000.0) as int
-            for layer in canvas.text_layers() {
-                let text = layer.text_layer(self.display_scale)
-                var image_cache = self.cache_for_image(1, layer.id(), scale_key)
-                self.refresh_image(
-                    device,
-                    image_cache,
-                    layer.revision(),
-                    text.image,
-                    "GFX.Scene2D canvas text"
-                )
-                self.sprite_draws.append(SpriteDraw(
-                    cache:self.image_index(image_cache),
-                    model:canvas.text_model(transform, self.viewport),
-                    size:canvas.text_size(text.size),
-                    pivot:canvas.text_pivot(text.origin, text.size),
-                    color:canvas.color,
-                    region:Math.Vec4(0.0, 0.0, 1.0, 1.0),
-                    sampling:0,
-                    layer:canvas.layer,
-                    depth:canvas.depth,
-                    order:entity.index * 2 + 1,
-                    viewport:canvas.uses_viewport()
-                ))
-            }
+            self.collect_canvas_text(device, entity, transform, canvas)
+        }
+    }
+
+    private func collect_canvas_text(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        transform:@Transform,
+        canvas:@SceneCanvas
+    ) {
+        let scale_key = Math.round(self.display_scale * 1000.0) as int
+        for layer in canvas.text_layers() {
+            let text = layer.text_layer(self.display_scale)
+            var image_cache = self.cache_for_image(1, layer.id(), scale_key)
+            self.refresh_image(
+                device,
+                image_cache,
+                layer.revision(),
+                text.image,
+                "GFX.Scene2D canvas text"
+            )
+            self.sprite_draws.append(SpriteDraw(
+                cache:self.image_index(image_cache),
+                model:canvas.text_model(transform, self.viewport),
+                size:canvas.text_size(text.size),
+                pivot:canvas.text_pivot(text.origin, text.size),
+                color:canvas.color,
+                region:Math.Vec4(0.0, 0.0, 1.0, 1.0),
+                sampling:0,
+                layer:canvas.layer,
+                depth:canvas.depth,
+                order:entity.index * 2 + 1,
+                viewport:canvas.uses_viewport()
+            ))
         }
     }
 
@@ -555,6 +561,23 @@ package class Renderer {
             return cache_index
         }
         return -1
+    }
+
+    private func resolve_scene_drawing_cache(
+        device:@GPU.Device,
+        entity_index:int,
+        canvas:@SceneCanvas
+    ) int {
+        var snapshot = canvas.snapshot()
+        var cache_index = -1
+        if canvas.revision() > 1 {
+            cache_index = self.mutable_scene_drawing(entity_index, snapshot)
+        } else {
+            cache_index = self.register_scene_drawing(snapshot)
+        }
+        var cache = self.scene_drawing_cache[cache_index]
+        self.refresh_scene_geometry(device, cache)
+        return cache_index
     }
 
     private func register_scene_drawing(snapshot:@Snapshot) int {
