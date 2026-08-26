@@ -71,6 +71,25 @@ several warm-up runs, and then rotate between the three executables. Compare at
 least five results per version and use the medians. Compilation and shader
 translation time are not part of the FPS measurement.
 
+`RunComparison.sh` automates that complete protocol from any working directory:
+
+```sh
+Packages/GFX.Scene2D/Benchmarks/Boids/RunComparison.sh --wait
+```
+
+By default it builds all three Release executables, discards one warm-up per
+witness, records seven processes per witness in Silex, C++ architectural, C++
+direct order, validates their count and normalized display metadata, and writes
+a timestamped raw log under `Benchmarks/Baselines/`. The final terminal table
+and log comments report the median, range, median absolute deviation (MAD), and
+relative difference from the architectural C++ witness.
+
+Run it from an external terminal with `--wait` when the Codex process or other
+workloads may affect the result. After the build finishes, close those workloads
+and press Return in the terminal. Use `--runs`, `--warmups`, `--output`, or
+`--build-dir` to override the capture without editing the script; `--skip-build`
+reuses executables already present in that build directory.
+
 The architectural C++ witness is the closest comparison for Silex/GFX. It
 matches the major ECS, GPU upload, shader, instancing, presentation, and data
 layout costs without pretending to duplicate GFX's scheduler or FrameGraph.

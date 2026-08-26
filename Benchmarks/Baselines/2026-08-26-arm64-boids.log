@@ -4,6 +4,8 @@
 # memory_bytes=19327352832
 # os=macOS_26.5.2_25F84
 # architecture=arm64
+# measurement_context=codex_agent_active
+# acceptance=observation_only_due_to_competing_workload
 # silex_mode=release_default
 # cpp_mode=Release
 # silex_version=0.41.0
