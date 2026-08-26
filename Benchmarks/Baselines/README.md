@@ -23,6 +23,41 @@ This control demonstrates the regression under an uncontended capture; it is
 not the post-fix acceptance result. A matching capture from the corrected
 revision must be compared with it before accepting the recovered performance.
 
+## 2026-08-26 clean post-fix control
+
+[`2026-08-26-110454-arm64-boids.log`](2026-08-26-110454-arm64-boids.log) is the
+first clean seven-round capture of Scene2D commit `4d52dbd`, after restoring
+the immutable Canvas fast path. The host had waited for competing workloads,
+and every recorded configuration field matches the pre-fix control above.
+
+| Witness | Median | MAD | Range | Relative to C++ architectural |
+| --- | ---: | ---: | ---: | ---: |
+| Silex/GFX | 83.548 FPS | 0.21% | 83.370-84.035 FPS | -3.13% |
+| C++ architectural | 86.250 FPS | 0.12% | 85.951-86.952 FPS | reference |
+| C++ direct | 85.646 FPS | 0.13% | 85.454-85.766 FPS | -0.70% |
+
+This result is stable but remains below the earlier 87-88 FPS observations.
+It therefore freezes the corrected revision under this machine state without
+claiming that the wider Scene2D performance gap has been resolved.
+
+## 2026-08-26 compact-packing candidate observation
+
+[`2026-08-26-144618-arm64-boids.log`](2026-08-26-144618-arm64-boids.log) was
+captured after a deep-sleep wake, with the compact instance-packing working
+tree later committed as `12ce794`. The runner reports dirty source repositories,
+so this is an exploratory control rather than clean acceptance evidence.
+
+| Witness | Median | MAD | Range | Relative to C++ architectural |
+| --- | ---: | ---: | ---: | ---: |
+| Silex/GFX | 88.591 FPS | 0.37% | 84.277-88.919 FPS | -2.19% |
+| C++ architectural | 90.575 FPS | 0.80% | 88.105-91.426 FPS | reference |
+| C++ direct | 88.926 FPS | 2.05% | 85.924-90.963 FPS | -1.82% |
+
+The higher absolute values across all three witnesses are consistent with host
+state materially affecting throughput. The relative ordering still leaves C++
+architectural ahead of Silex, while the wide Silex and C++ direct ranges make
+small cross-process differences unsuitable as acceptance criteria.
+
 ## 2026-08-26 contended macOS ARM64 observation
 
 [`2026-08-26-arm64-boids.log`](2026-08-26-arm64-boids.log) compares the three
