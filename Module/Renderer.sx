@@ -80,10 +80,7 @@ class CachedImage {
 
 struct SceneDraw {
     let cache:int
-    let model_x:Math.Vec2
-    let model_y:Math.Vec2
-    let model_translation:Math.Vec2
-    let color:Color
+    let instance:int
     let layer:int
     let depth:float
     let order:int
@@ -136,6 +133,9 @@ package class Renderer {
     private var drawing_instance_upload:GPU.TransferBuffer? = null
     private var drawing_instance_capacity:int
     private var drawing_instance_packed:str
+    private var drawing_instance_scratch:str
+    private var drawing_instance_storage_capacity:int
+    private var drawing_instance_write_address:uint
     private var projection:Math.Mat4
     private var scene_view_projection:Math.Mat4
     private var viewport:Math.Vec2
@@ -160,6 +160,9 @@ package class Renderer {
         self.scene_entries = []
         self.drawing_instance_capacity = 0
         self.drawing_instance_packed = "\0"
+        self.drawing_instance_scratch = "\0"
+        self.drawing_instance_storage_capacity = 1
+        self.drawing_instance_write_address = 0
         self.projection = Math.Mat4.identity()
         self.scene_view_projection = Math.Mat4.identity()
         self.viewport = Math.Vec2(1.0)
@@ -281,6 +284,13 @@ package class Renderer {
         self.scene_draws.clear()
         self.sprite_draws.clear()
         self.scene_entries.clear()
+        self.drawing_instance_write_address = 0
+        if self.drawing_instance_storage_capacity >= 48 {
+            var bytes = self.drawing_instance_packed
+            let address = C.address_bits(C.mutable_string_pointer(bytes))
+            self.drawing_instance_packed = bytes
+            self.drawing_instance_write_address = address
+        }
     }
 
     func consider_camera(transform:@Transform, camera:@Camera) {
@@ -313,17 +323,25 @@ package class Renderer {
         }
         var cache = self.scene_drawing_cache[cache_index]
         let model = canvas.affine_model(transform, self.viewport)
+        let draw_index = self.scene_draws.count()
+        self.ensure_scene_instance_storage((draw_index + 1) * 48)
         self.scene_draws.append(SceneDraw(
             cache:cache_index,
-            model_x:model.x,
-            model_y:model.y,
-            model_translation:model.translation,
-            color:canvas.color,
+            instance:draw_index,
             layer:canvas.layer,
             depth:canvas.depth,
             order:entity.index * 2,
             viewport:canvas.uses_viewport()
         ))
+        Packing.write_affine_instance(
+            self.drawing_instance_write_address,
+            draw_index * 48,
+            model.x,
+            model.y,
+            model.translation,
+            canvas.depth,
+            canvas.color
+        )
         if canvas.has_text() {
             self.collect_canvas_text(device, entity, transform, canvas)
         }
@@ -396,7 +414,7 @@ package class Renderer {
     }
 
     func finish_prepare(device:@GPU.Device) {
-        sort_scene_draws(
+        let reordered = sort_scene_draws(
             self.scene_draws,
             self.scene_draw_scratch,
             self.scene_layer_counts,
@@ -407,7 +425,7 @@ package class Renderer {
         } else {
             self.rebuild_scene_entries()
         }
-        self.prepare_scene_instances(device)
+        self.prepare_scene_instances(device, reordered)
     }
 
     func draw(pass:@GPU.RenderPass) {
@@ -719,11 +737,49 @@ package class Renderer {
         cache.revision = revision
     }
 
-    private func prepare_scene_instances(device:@GPU.Device) {
+    private func ensure_scene_instance_storage(byte_count:int) {
+        if self.drawing_instance_storage_capacity >= byte_count { return }
+        var grown = Packing.storage(byte_count)
+        let destination = C.address_bits(C.mutable_string_pointer(grown))
+        if self.drawing_instance_write_address != 0 {
+            Packing.copy_affine_instances(
+                destination,
+                self.drawing_instance_write_address,
+                self.scene_draws.count()
+            )
+        }
+        self.drawing_instance_packed = grown
+        self.drawing_instance_storage_capacity = C.byte_count(grown) as int
+        self.drawing_instance_write_address = destination
+    }
+
+    private func reorder_scene_instances(byte_count:int) {
+        var reordered = self.drawing_instance_scratch
+        if C.byte_count(reordered) < byte_count as uint {
+            reordered = Packing.storage(byte_count)
+        }
+        let destination = C.address_bits(C.mutable_string_pointer(reordered))
+        var index = 0
+        while index < self.scene_draws.count() {
+            Packing.copy_affine_instance(
+                destination,
+                index * 48,
+                self.drawing_instance_write_address,
+                self.scene_draws[index].instance * 48
+            )
+            index++
+        }
+        self.drawing_instance_scratch = self.drawing_instance_packed
+        self.drawing_instance_packed = reordered
+        self.drawing_instance_storage_capacity = C.byte_count(reordered) as int
+        self.drawing_instance_write_address = destination
+    }
+
+    private func prepare_scene_instances(device:@GPU.Device, reordered:bool) {
         if self.scene_draws.count() == 0 { return }
         let byte_count = self.scene_draws.count() * 48
+        if reordered { self.reorder_scene_instances(byte_count) }
         if self.drawing_instances == null || self.drawing_instance_capacity < byte_count {
-            self.drawing_instance_packed = Packing.storage(byte_count)
             self.drawing_instance_upload = device.upload_buffer(
                 byte_count,
                 "GFX.Scene2D retained drawing instance upload"
@@ -736,21 +792,6 @@ package class Renderer {
             self.drawing_instance_capacity = byte_count
         }
         var bytes = self.drawing_instance_packed
-        let address = C.address_bits(C.mutable_string_pointer(bytes))
-        var index = 0
-        for draw in self.scene_draws {
-            let offset = index * 48
-            Packing.write_affine_instance(
-                address,
-                offset,
-                draw.model_x,
-                draw.model_y,
-                draw.model_translation,
-                draw.depth,
-                draw.color
-            )
-            index++
-        }
         self.drawing_instance_packed = bytes
         if let upload = self.drawing_instance_upload {
             if let destination = self.drawing_instances {
@@ -951,15 +992,15 @@ local func sort_scene_draws(
     scratch:&SceneDraw[],
     counts:&int[],
     positions:&int[]
-) {
-    if draws.count() < 2 { return }
+) bool {
+    if draws.count() < 2 { return false }
     var ordered = 1
     while ordered < draws.count() &&
         !scene_draw_before(draws[ordered], draws[ordered - 1])
     {
         ordered++
     }
-    if ordered == draws.count() { return }
+    if ordered == draws.count() { return false }
 
     var minimum_layer = draws[0].layer
     var maximum_layer = draws[0].layer
@@ -1001,9 +1042,10 @@ local func sort_scene_draws(
         {
             ordered++
         }
-        if ordered == draws.count() { return }
+        if ordered == draws.count() { return true }
     }
     quick_sort_scene_draws(draws, 0, draws.count() - 1)
+    return true
 }
 
 local func quick_sort_scene_draws(

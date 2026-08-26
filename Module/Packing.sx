@@ -177,6 +177,32 @@ func write_affine_instance(
     write_color(address, offset + 32, color)
 }
 
+func copy_affine_instance(
+    destination:uint,
+    destination_offset:int,
+    source:uint,
+    source_offset:int
+) {
+    var byte_offset = 0
+    while byte_offset < 48 {
+        let value = C.load<uint64>(source, (source_offset + byte_offset) as uint)
+        let stored = C.store<uint64>(
+            destination,
+            (destination_offset + byte_offset) as uint,
+            value
+        )
+        byte_offset += 8
+    }
+}
+
+func copy_affine_instances(destination:uint, source:uint, count:int) {
+    var index = 0
+    while index < count {
+        copy_affine_instance(destination, index * 48, source, index * 48)
+        index++
+    }
+}
+
 func write_color(address:uint, offset:int, value:Color) {
     write_float(address, offset, value.r)
     write_float(address, offset + 4, value.g)
