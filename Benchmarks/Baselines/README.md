@@ -4,6 +4,25 @@ This directory archives raw output from the three witnesses in
 [`../Boids`](../Boids). The records are performance controls, not correctness
 tests or portable timing claims.
 
+## 2026-08-26 clean pre-fix regression control
+
+[`2026-08-26-101358-arm64-boids.log`](2026-08-26-101358-arm64-boids.log) is a
+user-run capture made after waiting for competing workloads. Its repository
+metadata was clean and it follows the package runner's complete seven-round
+protocol. It records the state immediately before restoring the immutable
+Canvas fast path in Scene2D, and is retained as the regression control for that
+change.
+
+| Witness | Median | MAD | Range | Relative to C++ architectural |
+| --- | ---: | ---: | ---: | ---: |
+| Silex/GFX | 83.468 FPS | 0.69% | 82.889-84.631 FPS | -3.67% |
+| C++ architectural | 86.645 FPS | 0.27% | 86.150-87.109 FPS | reference |
+| C++ direct | 85.751 FPS | 0.15% | 85.610-86.741 FPS | -1.03% |
+
+This control demonstrates the regression under an uncontended capture; it is
+not the post-fix acceptance result. A matching capture from the corrected
+revision must be compared with it before accepting the recovered performance.
+
 ## 2026-08-26 contended macOS ARM64 observation
 
 [`2026-08-26-arm64-boids.log`](2026-08-26-arm64-boids.log) compares the three
