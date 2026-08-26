@@ -328,33 +328,31 @@ package class Renderer {
             viewport:canvas.uses_viewport()
         ))
         if canvas.has_text() {
-            let text = snapshot.text_layer(self.display_scale)
             let scale_key = Math.round(self.display_scale * 1000.0) as int
-            var image_cache = self.cache_for_image(
-                1,
-                snapshot.text_revision(),
-                scale_key
-            )
-            self.refresh_image(
-                device,
-                image_cache,
-                snapshot.text_revision(),
-                text.image,
-                "GFX.Scene2D canvas text"
-            )
-            self.sprite_draws.append(SpriteDraw(
-                cache:self.image_index(image_cache),
-                model:canvas.text_model(transform, self.viewport),
-                size:canvas.text_size(text.size),
-                pivot:canvas.text_pivot(text.origin, text.size),
-                color:canvas.color,
-                region:Math.Vec4(0.0, 0.0, 1.0, 1.0),
-                sampling:0,
-                layer:canvas.layer,
-                depth:canvas.depth,
-                order:entity.index * 2 + 1,
-                viewport:canvas.uses_viewport()
-            ))
+            for layer in canvas.text_layers() {
+                let text = layer.text_layer(self.display_scale)
+                var image_cache = self.cache_for_image(1, layer.id(), scale_key)
+                self.refresh_image(
+                    device,
+                    image_cache,
+                    layer.revision(),
+                    text.image,
+                    "GFX.Scene2D canvas text"
+                )
+                self.sprite_draws.append(SpriteDraw(
+                    cache:self.image_index(image_cache),
+                    model:canvas.text_model(transform, self.viewport),
+                    size:canvas.text_size(text.size),
+                    pivot:canvas.text_pivot(text.origin, text.size),
+                    color:canvas.color,
+                    region:Math.Vec4(0.0, 0.0, 1.0, 1.0),
+                    sampling:0,
+                    layer:canvas.layer,
+                    depth:canvas.depth,
+                    order:entity.index * 2 + 1,
+                    viewport:canvas.uses_viewport()
+                ))
+            }
         }
     }
 

@@ -30,7 +30,9 @@ the `GFX.Components`, `GFX.Plugins`, and `GFX.Resources` catalogs without
 changing their public names.
 
 Replacing a Canvas is incremental: mutable geometry reuses a bounded GPU
-allocation, and unchanged text is neither rerasterized nor reuploaded.
+allocation, and each text command keeps a stable texture identity. Changing a
+single label rerasterizes and uploads only that label; unchanged text is
+neither rerasterized nor reuploaded.
 
 The package owns its shaders, examples, tests, benchmark, and documentation.
 See [Docs/README.md](Docs/README.md) for coordinates, Canvas placement, camera

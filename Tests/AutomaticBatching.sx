@@ -91,7 +91,7 @@ func mutable_drawing(value:float) Canvas {
             Canvas.Circle(Math.Vec2(value, 8.0), 4.0),
             Canvas.Fill.solid(Color.cyan_400())
         )
-        painter.text("Stable text", Math.Vec2(2.0, 2.0))
+        painter.text("Value $(value as int)", Math.Vec2(2.0, 2.0))
     })
 }
 

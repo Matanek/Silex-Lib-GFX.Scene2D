@@ -1,6 +1,7 @@
 use GFX.Color
 use GFX.Canvas.Canvas as AuthoredCanvas
 use GFX.Canvas.Snapshot
+use GFX.Canvas.TextLayer
 use GFX.Scene2D.Transform
 use STD.Math
 
@@ -66,6 +67,7 @@ public struct Canvas {
     func height() int { return self.drawing_height }
     module func snapshot_id() int { return self.retained.id() }
     module func has_text() bool { return self.retained.has_text() }
+    module func text_layers() TextLayer[] { return self.retained.text_layers() }
     module func uses_viewport() bool { return self.space == Space.viewport }
 
     module func display_size() Math.Vec2 {

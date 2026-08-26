@@ -36,9 +36,11 @@ size remain independent without requiring a batching API or shared-cache
 ceremony in application code.
 
 `Canvas.replace(...)` is also incremental. A changing Canvas reuses one
-per-entity GPU geometry allocation, and unchanged text keeps both its glyph
-coverage and uploaded texture. Dragging a control therefore does not grow the
-renderer caches or rerasterize every static label around it.
+per-entity GPU geometry allocation. Text commands retain independent cache
+identities, so a changing value updates one small texture while static labels
+keep both their glyph coverage and uploaded textures. Dragging a control
+therefore does not grow the renderer caches or rerasterize every label around
+it.
 
 ```silex
 use GFX.Canvas
