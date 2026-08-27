@@ -34,6 +34,11 @@ allocation, and each text command keeps a stable texture identity. Changing a
 single label rerasterizes and uploads only that label; unchanged text is
 neither rerasterized nor reuploaded.
 
+Image and text cache identities are indexed directly, so preparing a frame is
+linear in the visible layers instead of repeatedly scanning every retained
+texture. `Benchmarks/TextLayers.sx` exercises 1,500 fixed-grid cells retained
+as 30 changing row layers; `Benchmarks/Boids` remains the geometry/ECS guard.
+
 The package owns its shaders, examples, tests, benchmark, and documentation.
 See [Docs/README.md](Docs/README.md) for coordinates, Canvas placement, camera
 behavior, and renderer extension points.

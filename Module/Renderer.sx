@@ -109,6 +109,14 @@ class CachedImage {
     }
 }
 
+func image_cache_key(kind:int, index:int, generation:int) int {
+    if kind < 0 || index < 0 || generation < 0 {
+        panic("GFX.Scene2D image cache keys must not be negative")
+    }
+    let sum = index + generation
+    return (sum * (sum + 1) / 2 + generation) * 2 + kind
+}
+
 struct SceneDraw {
     let cache:int
     let instance:int
@@ -154,6 +162,7 @@ package class Renderer {
     private var last_scene_snapshot_id:int
     private var last_scene_cache_index:int
     private var image_cache:CachedImage[]
+    private var image_cache_indices:Dictionary<int, int>
     private var pending_image_uploads:int[]
     private var scene_draws:SceneDraw[]
     private var scene_draw_scratch:SceneDraw[]
@@ -184,6 +193,7 @@ package class Renderer {
         self.last_scene_snapshot_id = -1
         self.last_scene_cache_index = -1
         self.image_cache = []
+        self.image_cache_indices = Dictionary<int, int>(minimum_capacity:256)
         self.pending_image_uploads = []
         self.scene_draws = []
         self.scene_draw_scratch = []
@@ -389,8 +399,12 @@ package class Renderer {
     ) {
         let scale_key = Math.round(self.display_scale * 1000.0) as int
         for layer in canvas.text_layers() {
-            var image_cache = self.cache_for_image(1, layer.id(), scale_key)
-            let image_index = self.image_index(image_cache)
+            let image_index = self.cache_index_for_image(
+                1,
+                layer.id(),
+                scale_key
+            )
+            var image_cache = self.image_cache[image_index]
             if image_cache.texture == null ||
                 image_cache.revision != layer.revision()
             {
@@ -438,7 +452,12 @@ package class Renderer {
         let handle = sprite.asset()
         if !sprite.is_visible() || !images.contains(handle) { return }
         let image = images.snapshot(handle)
-        var cache = self.cache_for_image(0, handle.index(), handle.generation())
+        let cache_index = self.cache_index_for_image(
+            0,
+            handle.index(),
+            handle.generation()
+        )
+        var cache = self.image_cache[cache_index]
         self.refresh_image(
             device,
             cache,
@@ -447,7 +466,7 @@ package class Renderer {
             "GFX.Scene2D sprite"
         )
         self.sprite_draws.append(SpriteDraw(
-            cache:self.image_index(cache),
+            cache:cache_index,
             model:world_image_model(transform),
             size:sprite.sprite_size(),
             pivot:sprite.sprite_pivot(),
@@ -756,34 +775,20 @@ package class Renderer {
 
     package func image_cache_count() int { return self.image_cache.count() }
 
-    private func cache_for_image(kind:int, index:int, generation:int) CachedImage {
-        var cache_index = 0
-        while cache_index < self.image_cache.count() {
-            var cache = self.image_cache[cache_index]
-            if cache.kind == kind && cache.index == index &&
-                cache.generation == generation
-            {
-                return cache
-            }
-            cache_index++
+    private func cache_index_for_image(
+        kind:int,
+        index:int,
+        generation:int
+    ) int {
+        let key = image_cache_key(kind, index, generation)
+        if self.image_cache_indices.contains(key) {
+            return self.image_cache_indices.get(key) + 0
         }
         var created = CachedImage(kind, index, generation)
         self.image_cache.append(created)
-        return created
-    }
-
-    private func image_index(cache:@CachedImage) int {
-        var index = 0
-        while index < self.image_cache.count() {
-            var candidate = self.image_cache[index]
-            if candidate.kind == cache.kind && candidate.index == cache.index &&
-                candidate.generation == cache.generation
-            {
-                return index
-            }
-            index++
-        }
-        panic("GFX.Scene2D image cache is missing")
+        let created_index = self.image_cache.count() - 1
+        self.image_cache_indices.set(key, created_index)
+        return created_index
     }
 
     private func refresh_image(

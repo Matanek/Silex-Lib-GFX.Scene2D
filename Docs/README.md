@@ -42,6 +42,12 @@ keep both their glyph coverage and uploaded textures. Dragging a control
 therefore does not grow the renderer caches or rerasterize every label around
 it.
 
+The built-in renderer indexes sprite and text texture identities directly.
+Its lookup cost is therefore linear in the visible draws even for terminal-like
+Canvas content with many retained text layers. The reproducible
+`Benchmarks/TextLayers.sx` workload covers fixed-grid row updates separately
+from the Boids geometry and ECS benchmark.
+
 ```silex
 use GFX.Canvas
 use GFX.Color
