@@ -36,11 +36,14 @@ neither rerasterized nor reuploaded.
 
 Image and text cache identities are indexed directly, so preparing a frame is
 linear in the visible layers instead of repeatedly scanning every retained
-texture. `Benchmarks/TextLayers.sx` exercises 1,500 fixed-grid cells retained
-as 30 changing row layers; `Benchmarks/Boids` remains the geometry/ECS guard.
+texture. The centralized
+[UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
+benchmark exercises 1,500 fixed-grid cells retained as 30 changing row layers;
+[Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
+remains the geometry/ECS guard.
 
-The package owns its shaders, tests, benchmarks, the benchmark-capable Boids
-example, and documentation. The visual
+The package owns its shaders, tests, and documentation. Public performance
+campaigns live in `Silex-Benchmarks`, while the visual
 [analog clock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 lives in `Silex-Examples`. See [Docs/README.md](Docs/README.md) for coordinates,
 Canvas placement, camera behavior, and renderer extension points.

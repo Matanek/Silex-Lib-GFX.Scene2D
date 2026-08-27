@@ -44,9 +44,11 @@ it.
 
 The built-in renderer indexes sprite and text texture identities directly.
 Its lookup cost is therefore linear in the visible draws even for terminal-like
-Canvas content with many retained text layers. The reproducible
-`Benchmarks/TextLayers.sx` workload covers fixed-grid row updates separately
-from the Boids geometry and ECS benchmark.
+Canvas content with many retained text layers. The centralized
+[UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
+workload covers fixed-grid row updates separately from the
+[Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
+geometry and ECS benchmark.
 
 ```silex
 use GFX.Canvas
