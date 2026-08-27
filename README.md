@@ -39,6 +39,8 @@ linear in the visible layers instead of repeatedly scanning every retained
 texture. `Benchmarks/TextLayers.sx` exercises 1,500 fixed-grid cells retained
 as 30 changing row layers; `Benchmarks/Boids` remains the geometry/ECS guard.
 
-The package owns its shaders, examples, tests, benchmark, and documentation.
-See [Docs/README.md](Docs/README.md) for coordinates, Canvas placement, camera
-behavior, and renderer extension points.
+The package owns its shaders, tests, benchmarks, the benchmark-capable Boids
+example, and documentation. The visual
+[analog clock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
+lives in `Silex-Examples`. See [Docs/README.md](Docs/README.md) for coordinates,
+Canvas placement, camera behavior, and renderer extension points.
