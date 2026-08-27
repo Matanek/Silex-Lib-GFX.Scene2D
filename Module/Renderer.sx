@@ -17,6 +17,7 @@ use STD.Math
 
 class CachedSceneDrawing {
     var snapshot_id:int
+    var geometry_revision:int
     var geometry_hash:uint
     var packed_vertices:str
     var vertices:GPU.Buffer? = null
@@ -28,12 +29,14 @@ class CachedSceneDrawing {
 
     init(
         snapshot_id:int,
+        geometry_revision:int,
         geometry_hash:uint,
         packed_vertices:str,
         vertex_count:int,
         mutable:bool = false
     ) {
         self.snapshot_id = snapshot_id
+        self.geometry_revision = geometry_revision
         self.geometry_hash = geometry_hash
         self.packed_vertices = packed_vertices
         self.vertex_count = vertex_count
@@ -44,18 +47,22 @@ class CachedSceneDrawing {
 
     func bytes() str { return self.packed_vertices }
 
+    func matches(geometry_hash:uint, packed_vertices:@str) bool {
+        return self.geometry_hash == geometry_hash &&
+            self.packed_vertices == packed_vertices
+    }
+
+    func retain_snapshot(snapshot_id:int) { self.snapshot_id = snapshot_id }
+
     func replace(
         snapshot_id:int,
+        geometry_revision:int,
         geometry_hash:uint,
         packed_vertices:str,
         vertex_count:int
     ) {
         self.snapshot_id = snapshot_id
-        if self.geometry_hash == geometry_hash &&
-            self.packed_vertices == packed_vertices
-        {
-            return
-        }
+        self.geometry_revision = geometry_revision
         self.geometry_hash = geometry_hash
         self.packed_vertices = packed_vertices
         self.vertex_count = vertex_count
@@ -69,12 +76,36 @@ class CachedImage {
     let generation:int
     var revision:int
     var texture:GPU.Texture? = null
+    var texture_width:int
+    var texture_height:int
+    var upload:GPU.TransferBuffer? = null
+    var upload_capacity:int
+    var upload_width:int
+    var upload_height:int
+    var text_origin:Math.Vec2
+    var text_size:Math.Vec2
 
     init(kind:int, index:int, generation:int) {
         self.kind = kind
         self.index = index
         self.generation = generation
         self.revision = 0
+        self.texture_width = 0
+        self.texture_height = 0
+        self.upload_capacity = 0
+        self.upload_width = 0
+        self.upload_height = 0
+        self.text_origin = Math.Vec2()
+        self.text_size = Math.Vec2()
+    }
+
+    func region(width:int, height:int) Math.Vec4 {
+        return Math.Vec4(
+            0.0,
+            0.0,
+            width as float / self.texture_width as float,
+            height as float / self.texture_height as float
+        )
     }
 }
 
@@ -123,6 +154,7 @@ package class Renderer {
     private var last_scene_snapshot_id:int
     private var last_scene_cache_index:int
     private var image_cache:CachedImage[]
+    private var pending_image_uploads:int[]
     private var scene_draws:SceneDraw[]
     private var scene_draw_scratch:SceneDraw[]
     private var scene_layer_counts:int[]
@@ -152,6 +184,7 @@ package class Renderer {
         self.last_scene_snapshot_id = -1
         self.last_scene_cache_index = -1
         self.image_cache = []
+        self.pending_image_uploads = []
         self.scene_draws = []
         self.scene_draw_scratch = []
         self.scene_layer_counts = []
@@ -284,6 +317,7 @@ package class Renderer {
         self.scene_draws.clear()
         self.sprite_draws.clear()
         self.scene_entries.clear()
+        self.pending_image_uploads.clear()
         self.drawing_instance_write_address = 0
         if self.drawing_instance_storage_capacity >= 48 {
             var bytes = self.drawing_instance_packed
@@ -355,22 +389,36 @@ package class Renderer {
     ) {
         let scale_key = Math.round(self.display_scale * 1000.0) as int
         for layer in canvas.text_layers() {
-            let text = layer.text_layer(self.display_scale)
             var image_cache = self.cache_for_image(1, layer.id(), scale_key)
-            self.refresh_image(
-                device,
-                image_cache,
-                layer.revision(),
-                text.image,
-                "GFX.Scene2D canvas text"
-            )
+            let image_index = self.image_index(image_cache)
+            if image_cache.texture == null ||
+                image_cache.revision != layer.revision()
+            {
+                let text = layer.text_layer(self.display_scale)
+                self.refresh_text_image(
+                    device,
+                    image_cache,
+                    image_index,
+                    layer.revision(),
+                    text.image,
+                    "GFX.Scene2D canvas text"
+                )
+                image_cache.text_origin = text.origin
+                image_cache.text_size = text.size
+            }
             self.sprite_draws.append(SpriteDraw(
-                cache:self.image_index(image_cache),
+                cache:image_index,
                 model:canvas.text_model(transform, self.viewport),
-                size:canvas.text_size(text.size),
-                pivot:canvas.text_pivot(text.origin, text.size),
+                size:canvas.text_size(image_cache.text_size),
+                pivot:canvas.text_pivot(
+                    image_cache.text_origin,
+                    image_cache.text_size
+                ),
                 color:canvas.color,
-                region:Math.Vec4(0.0, 0.0, 1.0, 1.0),
+                region:image_cache.region(
+                    image_cache.upload_width,
+                    image_cache.upload_height
+                ),
                 sampling:0,
                 layer:canvas.layer,
                 depth:canvas.depth,
@@ -414,6 +462,7 @@ package class Renderer {
     }
 
     func finish_prepare(device:@GPU.Device) {
+        self.submit_image_uploads(device)
         let reordered = sort_scene_draws(
             self.scene_draws,
             self.scene_draw_scratch,
@@ -618,6 +667,7 @@ package class Renderer {
         }
         var created = CachedSceneDrawing(
             snapshot_id,
+            snapshot.geometry_revision(),
             geometry_hash,
             packed,
             geometry.vertex_count()
@@ -635,14 +685,24 @@ package class Renderer {
             let cache_index:int = self.mutable_scene_drawings.get(entity_index) + 0
             var cache = self.scene_drawing_cache[cache_index]
             if cache.snapshot_id != snapshot.id() {
+                if cache.geometry_revision == snapshot.geometry_revision() {
+                    cache.retain_snapshot(snapshot.id())
+                    return cache_index
+                }
                 let geometry = snapshot.geometry()
-                let packed = Packing.drawing_vertices(geometry)
-                cache.replace(
-                    snapshot.id(),
-                    Hashing.hash(packed),
-                    packed,
-                    geometry.vertex_count()
-                )
+                var packed = Packing.drawing_vertices(geometry)
+                let geometry_hash = Hashing.hash(packed)
+                if cache.matches(geometry_hash, packed) {
+                    cache.retain_snapshot(snapshot.id())
+                } else {
+                    cache.replace(
+                        snapshot.id(),
+                        snapshot.geometry_revision(),
+                        geometry_hash,
+                        move packed,
+                        geometry.vertex_count()
+                    )
+                }
             }
             return cache_index
         }
@@ -650,6 +710,7 @@ package class Renderer {
         let packed = Packing.drawing_vertices(geometry)
         var created = CachedSceneDrawing(
             snapshot.id(),
+            snapshot.geometry_revision(),
             Hashing.hash(packed),
             packed,
             geometry.vertex_count(),
@@ -735,6 +796,78 @@ package class Renderer {
         if cache.texture != null && cache.revision == revision { return }
         cache.texture = upload_texture(device, image, name)
         cache.revision = revision
+    }
+
+    private func refresh_text_image(
+        device:@GPU.Device,
+        cache:&CachedImage,
+        cache_index:int,
+        revision:int,
+        image:@Image,
+        name:str
+    ) {
+        if cache.texture != null && cache.revision == revision { return }
+        if cache.texture == null || cache.texture_width < image.width() ||
+            cache.texture_height < image.height()
+        {
+            var width = image.width()
+            var height = image.height()
+            if cache.texture_width > 0 {
+                width = cache.texture_width * 2
+                if width < image.width() { width = image.width() }
+            }
+            if cache.texture_height > 0 {
+                height = cache.texture_height * 2
+                if height < image.height() { height = image.height() }
+            }
+            cache.texture = device.texture(GPU.TextureSettings(
+                format:GPU.TextureFormat.rgba8_unorm,
+                width:width,
+                height:height,
+                usage:GPU.TextureUsage.for_sampling(),
+                name:name
+            ))
+            cache.texture_width = width
+            cache.texture_height = height
+        }
+        let pixel_count = image.byte_count()
+        if cache.upload == null || cache.upload_capacity < pixel_count {
+            cache.upload = device.upload_buffer(pixel_count, name + " upload")
+            cache.upload_capacity = pixel_count
+        }
+        if let upload = cache.upload {
+            upload.write_packed(image.packed_pixels(), pixel_count, cycle:true)
+        }
+        cache.upload_width = image.width()
+        cache.upload_height = image.height()
+        self.pending_image_uploads.append(cache_index)
+        cache.revision = revision
+    }
+
+    private func submit_image_uploads(device:@GPU.Device) {
+        if self.pending_image_uploads.is_empty() { return }
+        var commands = device.commands()
+        var transfer = commands.copy()
+        for cache_index in self.pending_image_uploads {
+            var cache = self.image_cache[cache_index]
+            if let upload = cache.upload {
+                if let texture = cache.texture {
+                    transfer.upload(
+                        upload,
+                        GPU.TextureRegion(
+                            texture:texture,
+                            width:cache.upload_width,
+                            height:cache.upload_height
+                        ),
+                        cache.upload_width,
+                        cache.upload_height
+                    )
+                }
+            }
+        }
+        transfer.finish()
+        commands.submit()
+        self.pending_image_uploads.clear()
     }
 
     private func ensure_scene_instance_storage(byte_count:int) {
@@ -898,9 +1031,9 @@ local func upload_texture(
         usage:GPU.TextureUsage.for_sampling(),
         name:name
     ))
-    var pixels = image.pixels()
-    var upload = device.upload_buffer(pixels.count(), name + " upload")
-    upload.write(@pixels[0:pixels.count()])
+    let pixel_count = image.byte_count()
+    var upload = device.upload_buffer(pixel_count, name + " upload")
+    upload.write_packed(image.packed_pixels(), pixel_count)
     var commands = device.commands()
     var transfer = commands.copy()
     transfer.upload(
