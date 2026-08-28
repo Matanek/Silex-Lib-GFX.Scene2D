@@ -30,9 +30,17 @@ use STD.Math
 var drawing = Canvas()
 world.spawn(ECS.EntityRecipe()
     ..with(Components.Transform2D(position:Math.Vec2(40.0, 20.0)))
-    ..with(Components.Canvas(drawing, 320, 180)..color = Color.cyan_400())
+    ..with(Components.Canvas(drawing)..color = Color.cyan_400())
 )
 ```
+
+This form defines no frame: the drawing's `(0, 0)` point coincides with the
+`Transform2D` position, and geometry may extend in every direction. `size` and
+the normalized pivot belong to framed placement and do not alter this local
+placement.
+
+`Components.Canvas(drawing, width, height)` preserves the historical behavior
+when a reference rectangle is useful for resizing, pivoting, or clipping text.
 
 World coordinates are the default, with a centered camera created by Scene2D
 when the application provides none. An explicit `Components.Camera2D` replaces
@@ -68,7 +76,8 @@ rotation, and scale in both cases.
 
 Placements that share one Canvas value also share cached geometry and render as
 instances. The built-in renderer also interns equivalent geometry from
-distinct Canvas values. Color, layer, pivot, and size remain per-entity.
+distinct Canvas values. Color and layer remain per-entity; pivot and size apply
+to framed placements.
 
 `Canvas.replace(...)` updates a drawing incrementally. Mutable geometry reuses
 a bounded GPU allocation and every text command retains an independent cache

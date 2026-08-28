@@ -24,6 +24,7 @@ public struct Canvas {
     private var current_revision:int
     private let drawing_width:int
     private let drawing_height:int
+    private let framed:bool
     var space:Space
     var anchor:Math.Vec2
     var size:Math.Vec2
@@ -41,6 +42,7 @@ public struct Canvas {
         self.current_revision = 1
         self.drawing_width = width
         self.drawing_height = height
+        self.framed = true
         self.space = Space.world
         self.anchor = Math.Vec2()
         self.size = Math.Vec2()
@@ -51,13 +53,33 @@ public struct Canvas {
         self.visible = true
     }
 
+    init(drawing:AuthoredCanvas) {
+        self.retained = drawing.snapshot()
+        self.current_revision = 1
+        self.drawing_width = 0
+        self.drawing_height = 0
+        self.framed = false
+        self.space = Space.world
+        self.anchor = Math.Vec2()
+        self.size = Math.Vec2()
+        self.pivot = Math.Vec2()
+        self.color = Color.white()
+        self.layer = 0
+        self.depth = 0.0
+        self.visible = true
+    }
+
     func replace(drawing:AuthoredCanvas) {
         var previous = self.retained
-        self.retained = drawing.snapshot(
-            self.drawing_width,
-            self.drawing_height,
-            reuse:previous
-        )
+        if self.framed {
+            self.retained = drawing.snapshot(
+                self.drawing_width,
+                self.drawing_height,
+                reuse:previous
+            )
+        } else {
+            self.retained = drawing.snapshot(reuse:previous)
+        }
         self.current_revision++
     }
 
@@ -65,6 +87,7 @@ public struct Canvas {
     func revision() int { return self.current_revision }
     func width() int { return self.drawing_width }
     func height() int { return self.drawing_height }
+    func is_framed() bool { return self.framed }
     module func snapshot_id() int { return self.retained.id() }
     module func has_text() bool { return self.retained.has_text() }
     module func text_layers() TextLayer[] { return self.retained.text_layers() }
@@ -76,10 +99,26 @@ public struct Canvas {
     }
 
     module func affine_model(transform:@Transform, viewport:Math.Vec2) AffineModel {
-        let displayed = self.display_size()
         let position = self.placed_position(transform, viewport)
         let transform_x = transform.scale.x
         let transform_y = self.oriented_scale_y(transform.scale.y)
+        if !self.framed {
+            if transform.rotation == 0.0 {
+                return AffineModel(
+                    x:Math.Vec2(transform_x, 0.0),
+                    y:Math.Vec2(0.0, transform_y),
+                    translation:position
+                )
+            }
+            let cosine = Math.cos(transform.rotation)
+            let sine = Math.sin(transform.rotation)
+            return AffineModel(
+                x:Math.Vec2(cosine * transform_x, sine * transform_x),
+                y:Math.Vec2(-sine * transform_y, cosine * transform_y),
+                translation:position
+            )
+        }
+        let displayed = self.display_size()
         let resized = self.size.x > 0.0 && self.size.y > 0.0
         let scale_x = affine_scale(
             transform_x,
@@ -145,6 +184,7 @@ public struct Canvas {
     }
 
     module func text_size(content:Math.Vec2) Math.Vec2 {
+        if !self.framed { return content }
         let displayed = self.display_size()
         return Math.Vec2(
             content.x * displayed.x / self.drawing_width as float,
@@ -153,6 +193,10 @@ public struct Canvas {
     }
 
     module func text_pivot(origin:Math.Vec2, content:Math.Vec2) Math.Vec2 {
+        if !self.framed {
+            if content.x <= 0.0 || content.y <= 0.0 { return Math.Vec2() }
+            return Math.Vec2(-origin.x / content.x, -origin.y / content.y)
+        }
         let displayed = self.display_size()
         let resolved_x = content.x * displayed.x / self.drawing_width as float
         let resolved_y = content.y * displayed.y / self.drawing_height as float

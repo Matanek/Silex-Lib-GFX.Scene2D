@@ -52,3 +52,29 @@ test "canvas model preserves 2D pivot scale rotation and depth" {
     assert(horizontal.nearly_equal(Math.Vec4(0.0, 4.0, 0.0, 0.0)))
     assert(vertical.nearly_equal(Math.Vec4(9.0, 0.0, 0.0, 0.0)))
 }
+
+test "place an unbounded canvas directly from its local origin" {
+    var drawing = SceneCanvas(AuthoredCanvas())
+    assert(!drawing.is_framed())
+    assert(drawing.width() == 0)
+    assert(drawing.height() == 0)
+
+    let transform = Transform(
+        position:Math.Vec2(20.0, 30.0),
+        rotation:Math.pi() * 0.5,
+        scale:Math.Vec2(2.0, 3.0)
+    )
+    let model = drawing.model(transform, Math.Vec2(100.0))
+    let origin = model.multiply(Math.Vec4(0.0, 0.0, 0.0, 1.0))
+    let horizontal = model.multiply(Math.Vec4(1.0, 0.0, 0.0, 0.0))
+    let vertical = model.multiply(Math.Vec4(0.0, 1.0, 0.0, 0.0))
+
+    assert(origin.nearly_equal(Math.Vec4(20.0, 30.0, 0.0, 1.0)))
+    assert(horizontal.nearly_equal(Math.Vec4(0.0, 2.0, 0.0, 0.0)))
+    assert(vertical.nearly_equal(Math.Vec4(3.0, 0.0, 0.0, 0.0)))
+    assert(drawing.text_size(Math.Vec2(12.0, 8.0)) == Math.Vec2(12.0, 8.0))
+    assert(drawing.text_pivot(
+        Math.Vec2(-6.0, -2.0),
+        Math.Vec2(12.0, 8.0)
+    ) == Math.Vec2(0.5, 0.25))
+}

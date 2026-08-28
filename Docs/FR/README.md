@@ -30,9 +30,18 @@ use STD.Math
 var drawing = Canvas()
 world.spawn(ECS.EntityRecipe()
     ..with(Components.Transform2D(position:Math.Vec2(40.0, 20.0)))
-    ..with(Components.Canvas(drawing, 320, 180)..color = Color.cyan_400())
+    ..with(Components.Canvas(drawing)..color = Color.cyan_400())
 )
 ```
+
+Cette forme ne définit aucun cadre : le point `(0, 0)` du dessin coïncide avec
+la position du `Transform2D`, et la géométrie peut s’étendre dans toutes les
+directions. `size` et le pivot normalisé appartiennent au mode cadré et ne
+modifient pas ce placement local.
+
+La forme `Components.Canvas(drawing, width, height)` conserve le comportement
+historique lorsqu’un rectangle de référence est utile pour redimensionner,
+pivoter ou découper le texte.
 
 Les coordonnées monde sont utilisées par défaut avec une caméra centrée créée
 par Scene2D si l’application n’en fournit aucune. Un `Components.Camera2D`
@@ -71,7 +80,8 @@ rotation et échelle dans les deux cas.
 Les placements qui partagent une même valeur Canvas partagent aussi leur
 géométrie en cache et sont rendus comme instances. Le renderer interne les
 déduplique également quand des Canvas distincts décrivent une géométrie
-équivalente. Couleur, couche, pivot et taille restent propres à chaque entité.
+équivalente. Couleur et couche restent propres à chaque entité ; pivot et taille
+s’appliquent aux placements cadrés.
 
 `Canvas.replace(...)` met à jour un dessin progressivement. La géométrie mutable
 réutilise une allocation GPU bornée et chaque commande de texte conserve une

@@ -38,6 +38,22 @@ func create_scene(world:&ECS.World, images:&Image.Store) {
         ..with(Components.Transform2D(position:Math.Vec2(-12.0, 0.0)))
         ..with(Components.Canvas(drawing, 32, 32))
     )
+    var local_drawing = Canvas()
+    local_drawing.paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(), 6.0),
+            Canvas.Fill.solid(Color.amber_400())
+        )
+        painter.text(
+            "origin",
+            Math.Vec2(-8.0, -4.0),
+            Canvas.TextStyle(size:6.0, color:Color.white())
+        )
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D(position:Math.Vec2(12.0, 12.0)))
+        ..with(Components.Canvas(local_drawing)..layer = 1)
+    )
     world.spawn(ECS.EntityRecipe()
         ..with(Components.Transform2D(position:Math.Vec2(-16.0, -16.0)))
         ..with(Components.Canvas(drawing, 32, 32)
