@@ -1,5 +1,7 @@
 use GFX.Color
 use GFX.Canvas.Canvas as AuthoredCanvas
+use GFX.Canvas.Geometry.Mesh
+use GFX.Canvas.Prepared
 use GFX.Canvas.Snapshot
 use GFX.Canvas.TextLayer
 use GFX.Scene2D.Transform
@@ -22,7 +24,7 @@ struct AffineModel {
 public struct Canvas {
     private var authored:AuthoredCanvas
     private var authored_revision:int
-    private var retained:Snapshot
+    private var prepared:Prepared
     private var current_revision:int
     private let drawing_width:int
     private let drawing_height:int
@@ -42,7 +44,8 @@ public struct Canvas {
         }
         self.authored = drawing
         self.authored_revision = drawing.revision()
-        self.retained = drawing.snapshot(width, height)
+        self.prepared = Prepared()
+        drawing.prepare(self.prepared, width, height)
         self.current_revision = 1
         self.drawing_width = width
         self.drawing_height = height
@@ -60,7 +63,8 @@ public struct Canvas {
     init(drawing:AuthoredCanvas) {
         self.authored = drawing
         self.authored_revision = drawing.revision()
-        self.retained = drawing.snapshot()
+        self.prepared = Prepared()
+        drawing.prepare(self.prepared)
         self.current_revision = 1
         self.drawing_width = 0
         self.drawing_height = 0
@@ -77,37 +81,41 @@ public struct Canvas {
 
     func replace(drawing:AuthoredCanvas) {
         self.authored = drawing
-        self.refresh(drawing)
+        self.refresh()
         self.authored_revision = drawing.revision()
     }
 
-    func snapshot() Snapshot { return self.retained }
+    func snapshot() Snapshot {
+        var drawing = self.authored
+        if self.framed {
+            return drawing.snapshot(self.drawing_width, self.drawing_height)
+        }
+        return drawing.snapshot()
+    }
     func revision() int { return self.current_revision }
     func width() int { return self.drawing_width }
     func height() int { return self.drawing_height }
     func is_framed() bool { return self.framed }
-    module func snapshot_id() int { return self.retained.id() }
-    module func has_text() bool { return self.retained.has_text() }
-    module func text_layers() TextLayer[] { return self.retained.text_layers() }
+    module func prepared_revision() int { return self.prepared.revision() }
+    module func geometry_revision() int { return self.prepared.geometry_revision() }
+    module func geometry() Mesh { return self.prepared.geometry() }
+    module func has_text() bool { return self.prepared.has_text() }
+    module func text_layers() TextLayer[] { return self.prepared.text_layers() }
     module func uses_viewport() bool { return self.space == Space.viewport }
 
     module func synchronize() {
         let revision = self.authored.revision()
         if revision == self.authored_revision { return }
-        self.refresh(self.authored)
+        self.refresh()
         self.authored_revision = revision
     }
 
-    private func refresh(drawing:AuthoredCanvas) {
-        var previous = self.retained
+    private func refresh() {
+        var drawing = self.authored
         if self.framed {
-            self.retained = drawing.snapshot(
-                self.drawing_width,
-                self.drawing_height,
-                reuse:previous
-            )
+            drawing.prepare(self.prepared, self.drawing_width, self.drawing_height)
         } else {
-            self.retained = drawing.snapshot(reuse:previous)
+            drawing.prepare(self.prepared)
         }
         self.current_revision++
     }

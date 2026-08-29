@@ -90,9 +90,11 @@ propres à chaque entité ; pivot et taille s'appliquent aux placements cadrés.
 
 `Canvas.replace(...)` change la source du composant lorsque l'application veut
 fournir une autre instance Canvas. Dans les deux cas, la géométrie mutable
-réutilise une allocation GPU bornée et chaque commande de texte conserve une
-identité de cache indépendante. Modifier un libellé ne rastérise et ne
-transfère donc que celui-ci.
+est préparée dans deux meshes CPU retenus, réutilise une allocation GPU bornée
+et chaque commande de texte conserve une identité de cache indépendante. Une
+frame animée réécrit ainsi les valeurs du mesh sans reconstruire ses capacités.
+Modifier uniquement un libellé ne transfère ni la géométrie, ni les autres
+couches de texte.
 
 Les identités de textures de sprites et de textes sont indexées directement ;
 la préparation d’une frame reste linéaire selon les dessins visibles. Les
@@ -104,8 +106,9 @@ gardent respectivement les parcours texte et géométrie/ECS.
 
 `Scene2D.Plugin` installe ses dépendances ECS, assets et rendu puis enregistre
 sa passe dans le frame graph public de `GFX.Rendering.Renderer`. Un renderer
-alternatif lit `snapshot()` et `revision()` sur le composant de placement au
-lieu de dépendre du cache GPU interne.
+alternatif peut lire `snapshot()` et `revision()` sur le composant de placement.
+Le renderer intégré suit le chemin incrémental `Canvas.Prepared` sans
+matérialiser ce snapshot complet à chaque frame.
 
 Les shaders `Drawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl` appartiennent à ce
 package. Ils ne constituent pas une API obligatoire ; une extension peut lire

@@ -87,8 +87,10 @@ to framed placements.
 
 `Canvas.replace(...)` changes the component's source when the application wants
 to provide another Canvas instance. In either case, mutable geometry reuses a
-bounded GPU allocation and every text command retains an independent cache
-identity. Changing a label therefore rerasterizes and uploads only that label.
+pair of retained CPU meshes and a bounded GPU allocation, while every text
+command retains an independent cache identity. An animated frame therefore
+rewrites mesh values without rebuilding its capacities. Changing only a label
+uploads neither geometry nor the other text layers.
 
 Sprite and text texture identities are indexed directly, so frame preparation
 remains linear in visible draws. The
@@ -100,8 +102,9 @@ benchmarks guard text and geometry/ECS paths respectively.
 
 `Scene2D.Plugin` installs its ECS, asset, and rendering dependencies and
 registers its pass in the public `GFX.Rendering.Renderer` frame graph. An
-alternative renderer reads `snapshot()` and `revision()` from the placement
-component instead of depending on the built-in GPU cache.
+alternative renderer can read `snapshot()` and `revision()` from the placement
+component. The built-in renderer follows the incremental `Canvas.Prepared`
+path without materializing that complete snapshot every frame.
 
 The `Drawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this
 package. They are not a mandatory API; an extension can read public scene data
