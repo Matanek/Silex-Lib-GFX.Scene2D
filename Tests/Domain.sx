@@ -22,6 +22,25 @@ test "name 2D concepts through their domain instead of their declarations" {
     assert(sprite.sampling() == Sampling.pixelated)
 }
 
+test "share one retained compilation across static Canvas placements" {
+    var source = AuthoredCanvas()
+    var first = SceneCanvas(source)
+    var second = SceneCanvas(source)
+
+    assert(first.prepared_revision() == second.prepared_revision())
+}
+
+test "separate static and mutable Canvas cache identities" {
+    var source = AuthoredCanvas()
+    var placement = SceneCanvas(source)
+    let retained_revision = placement.prepared_revision()
+
+    source.clear()
+    placement.synchronize()
+
+    assert(placement.prepared_revision() != retained_revision)
+}
+
 test "project positive world Y toward the top of the viewport" {
     let camera = Camera()
     let transform = Transform()

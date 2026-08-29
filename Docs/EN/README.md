@@ -84,10 +84,14 @@ Placements that share this instance also share cached geometry and render as
 instances. The built-in renderer also interns equivalent geometry from
 distinct Canvas values. Color and layer remain per-entity; pivot and size apply
 to framed placements.
+A placement that remains static keeps the `Snapshot` already cached by its
+drawing, so creating several thousand placements from the same instance only
+vectorizes the content once. The `Canvas.Prepared` mesh pair is allocated only
+after the first change observed on that placement.
 
 `Canvas.replace(...)` changes the component's source when the application wants
-to provide another Canvas instance. In either case, mutable geometry reuses a
-pair of retained CPU meshes and a bounded GPU allocation, while every text
+to provide another Canvas instance. After that first mutation, geometry reuses
+a pair of retained CPU meshes and a bounded GPU allocation, while every text
 command retains an independent cache identity. An animated frame therefore
 rewrites mesh values without rebuilding its capacities. Changing only a label
 uploads neither geometry nor the other text layers.

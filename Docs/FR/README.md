@@ -87,9 +87,13 @@ Les placements qui partagent cette instance partagent aussi leur géométrie en
 cache et sont rendus comme instances. Le renderer interne déduplique également
 les géométries équivalentes de Canvas distincts. Couleur et couche restent
 propres à chaque entité ; pivot et taille s'appliquent aux placements cadrés.
+Un placement qui demeure statique conserve le `Snapshot` déjà mémorisé par son
+dessin : créer plusieurs milliers de placements depuis la même instance ne
+vectorise donc le contenu qu'une fois. La paire de meshes `Canvas.Prepared`
+n'est créée qu'au premier changement observé sur ce placement.
 
 `Canvas.replace(...)` change la source du composant lorsque l'application veut
-fournir une autre instance Canvas. Dans les deux cas, la géométrie mutable
+fournir une autre instance Canvas. Après cette première mutation, la géométrie
 est préparée dans deux meshes CPU retenus, réutilise une allocation GPU bornée
 et chaque commande de texte conserve une identité de cache indépendante. Une
 frame animée réécrit ainsi les valeurs du mesh sans reconstruire ses capacités.

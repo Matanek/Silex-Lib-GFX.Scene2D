@@ -24,7 +24,8 @@ struct AffineModel {
 public struct Canvas {
     private var authored:AuthoredCanvas
     private var authored_revision:int
-    private var prepared:Prepared
+    private var retained:Snapshot
+    private var prepared:Prepared? = null
     private var current_revision:int
     private let drawing_width:int
     private let drawing_height:int
@@ -44,8 +45,7 @@ public struct Canvas {
         }
         self.authored = drawing
         self.authored_revision = drawing.revision()
-        self.prepared = Prepared()
-        drawing.prepare(self.prepared, width, height)
+        self.retained = drawing.snapshot(width, height)
         self.current_revision = 1
         self.drawing_width = width
         self.drawing_height = height
@@ -63,8 +63,7 @@ public struct Canvas {
     init(drawing:AuthoredCanvas) {
         self.authored = drawing
         self.authored_revision = drawing.revision()
-        self.prepared = Prepared()
-        drawing.prepare(self.prepared)
+        self.retained = drawing.snapshot()
         self.current_revision = 1
         self.drawing_width = 0
         self.drawing_height = 0
@@ -96,11 +95,28 @@ public struct Canvas {
     func width() int { return self.drawing_width }
     func height() int { return self.drawing_height }
     func is_framed() bool { return self.framed }
-    module func prepared_revision() int { return self.prepared.revision() }
-    module func geometry_revision() int { return self.prepared.geometry_revision() }
-    module func geometry() Mesh { return self.prepared.geometry() }
-    module func has_text() bool { return self.prepared.has_text() }
-    module func text_layers() TextLayer[] { return self.prepared.text_layers() }
+    module func prepared_revision() int {
+        // Snapshot and Prepared own independent positive identity sequences.
+        // Mutable revisions use the negative half so renderer keys cannot collide.
+        if let prepared = self.prepared { return -prepared.revision() }
+        return self.retained.id()
+    }
+    module func geometry_revision() int {
+        if let prepared = self.prepared { return prepared.geometry_revision() }
+        return self.retained.geometry_revision()
+    }
+    module func geometry() Mesh {
+        if let prepared = self.prepared { return prepared.geometry() }
+        return self.retained.geometry()
+    }
+    module func has_text() bool {
+        if let prepared = self.prepared { return prepared.has_text() }
+        return self.retained.has_text()
+    }
+    module func text_layers() TextLayer[] {
+        if let prepared = self.prepared { return prepared.text_layers() }
+        return self.retained.text_layers()
+    }
     module func uses_viewport() bool { return self.space == Space.viewport }
 
     module func synchronize() {
@@ -111,11 +127,14 @@ public struct Canvas {
     }
 
     private func refresh() {
+        if self.prepared == null { self.prepared = Prepared() }
         var drawing = self.authored
-        if self.framed {
-            drawing.prepare(self.prepared, self.drawing_width, self.drawing_height)
-        } else {
-            drawing.prepare(self.prepared)
+        if var prepared = self.prepared {
+            if self.framed {
+                drawing.prepare(prepared, self.drawing_width, self.drawing_height)
+            } else {
+                drawing.prepare(prepared)
+            }
         }
         self.current_revision++
     }
