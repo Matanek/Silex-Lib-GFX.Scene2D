@@ -44,7 +44,7 @@ func start_scene(
 
 func prepare_scene(
     device:@GPU.Device,
-    canvases:ECS.Query<(ECS.Entity, @Transform, @SceneCanvas)>,
+    canvases:ECS.Query<(ECS.Entity, @Transform, &SceneCanvas)>,
     sprites:ECS.Query<(ECS.Entity, @Transform, @SceneSprite)>,
     cameras:ECS.Query<(@Transform, @SceneCamera)>,
     window:@Window,
@@ -56,6 +56,7 @@ func prepare_scene(
         renderer.consider_camera(transform, camera)
     }
     for (entity, transform, canvas) in canvases {
+        canvas.synchronize()
         renderer.collect_canvas(device, entity, transform, canvas)
     }
     for (entity, transform, sprite) in sprites {

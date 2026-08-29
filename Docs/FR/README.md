@@ -77,13 +77,19 @@ rotation et échelle dans les deux cas.
 
 ## Comprendre la rétention et les caches
 
-Les placements qui partagent une même valeur Canvas partagent aussi leur
-géométrie en cache et sont rendus comme instances. Le renderer interne les
-déduplique également quand des Canvas distincts décrivent une géométrie
-équivalente. Couleur et couche restent propres à chaque entité ; pivot et taille
-s’appliquent aux placements cadrés.
+Le composant conserve l'identité du `GFX.Canvas.Canvas` reçu. Si le producteur
+appelle ensuite `clear()`, `paint(...)` ou une autre opération qui modifie ce
+dessin, Scene2D observe sa nouvelle révision avant le rendu suivant. Il n'est
+donc pas nécessaire d'appeler `world.update(...)` ni `replace(...)` pour animer
+les commandes d'une même instance Canvas.
 
-`Canvas.replace(...)` met à jour un dessin progressivement. La géométrie mutable
+Les placements qui partagent cette instance partagent aussi leur géométrie en
+cache et sont rendus comme instances. Le renderer interne déduplique également
+les géométries équivalentes de Canvas distincts. Couleur et couche restent
+propres à chaque entité ; pivot et taille s'appliquent aux placements cadrés.
+
+`Canvas.replace(...)` change la source du composant lorsque l'application veut
+fournir une autre instance Canvas. Dans les deux cas, la géométrie mutable
 réutilise une allocation GPU bornée et chaque commande de texte conserve une
 identité de cache indépendante. Modifier un libellé ne rastérise et ne
 transfère donc que celui-ci.

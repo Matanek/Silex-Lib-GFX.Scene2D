@@ -20,6 +20,8 @@ struct AffineModel {
 // the top-left, Y-down logical application viewport. Authored Canvas content
 // remains Y-down in both spaces and is oriented internally for the world.
 public struct Canvas {
+    private var authored:AuthoredCanvas
+    private var authored_revision:int
     private var retained:Snapshot
     private var current_revision:int
     private let drawing_width:int
@@ -38,6 +40,8 @@ public struct Canvas {
         if width <= 0 || height <= 0 {
             panic("GFX.Scene2D.Canvas dimensions must be positive")
         }
+        self.authored = drawing
+        self.authored_revision = drawing.revision()
         self.retained = drawing.snapshot(width, height)
         self.current_revision = 1
         self.drawing_width = width
@@ -54,6 +58,8 @@ public struct Canvas {
     }
 
     init(drawing:AuthoredCanvas) {
+        self.authored = drawing
+        self.authored_revision = drawing.revision()
         self.retained = drawing.snapshot()
         self.current_revision = 1
         self.drawing_width = 0
@@ -70,6 +76,29 @@ public struct Canvas {
     }
 
     func replace(drawing:AuthoredCanvas) {
+        self.authored = drawing
+        self.refresh(drawing)
+        self.authored_revision = drawing.revision()
+    }
+
+    func snapshot() Snapshot { return self.retained }
+    func revision() int { return self.current_revision }
+    func width() int { return self.drawing_width }
+    func height() int { return self.drawing_height }
+    func is_framed() bool { return self.framed }
+    module func snapshot_id() int { return self.retained.id() }
+    module func has_text() bool { return self.retained.has_text() }
+    module func text_layers() TextLayer[] { return self.retained.text_layers() }
+    module func uses_viewport() bool { return self.space == Space.viewport }
+
+    module func synchronize() {
+        let revision = self.authored.revision()
+        if revision == self.authored_revision { return }
+        self.refresh(self.authored)
+        self.authored_revision = revision
+    }
+
+    private func refresh(drawing:AuthoredCanvas) {
         var previous = self.retained
         if self.framed {
             self.retained = drawing.snapshot(
@@ -82,16 +111,6 @@ public struct Canvas {
         }
         self.current_revision++
     }
-
-    func snapshot() Snapshot { return self.retained }
-    func revision() int { return self.current_revision }
-    func width() int { return self.drawing_width }
-    func height() int { return self.drawing_height }
-    func is_framed() bool { return self.framed }
-    module func snapshot_id() int { return self.retained.id() }
-    module func has_text() bool { return self.retained.has_text() }
-    module func text_layers() TextLayer[] { return self.retained.text_layers() }
-    module func uses_viewport() bool { return self.space == Space.viewport }
 
     module func display_size() Math.Vec2 {
         if self.size.x > 0.0 && self.size.y > 0.0 { return self.size }

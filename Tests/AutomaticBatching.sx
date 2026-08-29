@@ -5,6 +5,7 @@ use GFX.Components
 use GFX.ECS
 use GFX.Rendering
 use GFX.Scene2D
+use GFX.Scene2D.Canvas as SceneCanvas
 use GFX.Scene2D.Renderer
 use GFX.Window.Plugin as WindowPlugin
 use STD.Math
@@ -85,6 +86,13 @@ class MutableCanvasCase {
     var updates:int = 0
 }
 
+class LiveCanvasCase {
+    var drawing:Canvas = mutable_drawing(4.0)
+    var updates:int = 0
+
+    func canvas() Canvas { return self.drawing }
+}
+
 func mutable_drawing(value:float) Canvas {
     return Canvas()..paint(func(painter:&Canvas.Painter) {
         painter.fill(
@@ -92,6 +100,16 @@ func mutable_drawing(value:float) Canvas {
             Canvas.Fill.solid(Color.cyan_400())
         )
         painter.text("Value $(value as int)", Math.Vec2(2.0, 2.0))
+    })
+}
+
+func paint_live_drawing(drawing:&Canvas, value:float) {
+    drawing.clear()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(value, 8.0), 4.0),
+            Canvas.Fill.solid(Color.amber_500())
+        )
     })
 }
 
@@ -121,6 +139,40 @@ func require_bounded_mutable_cache(
     if state.updates < 32 { return }
     assert(renderer.drawing_cache_count() <= 2)
     assert(renderer.image_cache_count() == 1)
+    controller.stop()
+}
+
+func create_live_geometry(world:&ECS.World, state:&LiveCanvasCase) {
+    var drawing = state.canvas()
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 64, 16))
+    )
+}
+
+func update_live_geometry(state:&LiveCanvasCase) {
+    let x = 4.0 + (state.updates % 48) as float
+    {
+        var drawing = state.canvas()
+        paint_live_drawing(drawing, x)
+    }
+    state.updates++
+}
+
+func require_live_canvas_revision(
+    canvases:ECS.Query<(ECS.Entity, @SceneCanvas)>,
+    renderer:@Renderer,
+    state:@LiveCanvasCase,
+    controller:&Application.Controller
+) {
+    if state.updates < 32 { return }
+    var count = 0
+    for (entity, canvas) in canvases {
+        assert(canvas.revision() > 1)
+        count++
+    }
+    assert(count == 1)
+    assert(renderer.drawing_cache_count() <= 2)
     controller.stop()
 }
 
@@ -170,6 +222,26 @@ test "reuse one GPU geometry cache while a Canvas changes" {
     application.add_after_system(
         Application.Schedule.render,
         require_bounded_mutable_cache
+    )
+    assert(application.run() == 0)
+}
+
+test "follow authored Canvas revisions without component replacement" {
+    var application = Application()
+    application.add_resource(LiveCanvasCase())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D live Canvas revisions"
+        ..width = 64
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_live_geometry)
+    application.add_system(Application.Schedule.update, update_live_geometry)
+    application.add_after_system(
+        Application.Schedule.render,
+        require_live_canvas_revision
     )
     assert(application.run() == 0)
 }

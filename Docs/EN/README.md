@@ -74,13 +74,20 @@ rotation, and scale in both cases.
 
 ## Understand retention and caches
 
-Placements that share one Canvas value also share cached geometry and render as
+The component retains the identity of the `GFX.Canvas.Canvas` it receives. If
+the producer later calls `clear()`, `paint(...)`, or another operation that
+changes that drawing, Scene2D observes its new revision before the next render.
+Animating commands on the same Canvas instance therefore requires neither
+`world.update(...)` nor `replace(...)`.
+
+Placements that share this instance also share cached geometry and render as
 instances. The built-in renderer also interns equivalent geometry from
 distinct Canvas values. Color and layer remain per-entity; pivot and size apply
 to framed placements.
 
-`Canvas.replace(...)` updates a drawing incrementally. Mutable geometry reuses
-a bounded GPU allocation and every text command retains an independent cache
+`Canvas.replace(...)` changes the component's source when the application wants
+to provide another Canvas instance. In either case, mutable geometry reuses a
+bounded GPU allocation and every text command retains an independent cache
 identity. Changing a label therefore rerasterizes and uploads only that label.
 
 Sprite and text texture identities are indexed directly, so frame preparation
