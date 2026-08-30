@@ -68,7 +68,6 @@ func prepare_scene(
         renderer.consider_camera(transform, camera)
     }
     for (entity, transform, canvas) in canvases {
-        canvas.synchronize()
         renderer.collect_canvas(device, entity, transform, canvas)
     }
     for (entity, transform, sprite) in sprites {

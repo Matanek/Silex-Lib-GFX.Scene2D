@@ -24,6 +24,7 @@ struct AffineModel {
 public struct Canvas {
     private var authored:AuthoredCanvas
     private var authored_revision:int
+    private var authored_origin_revision:int
     private var retained:Prepared
     private var current_revision:int
     private let drawing_width:int
@@ -43,7 +44,9 @@ public struct Canvas {
             panic("GFX.Scene2D.Canvas dimensions must be positive")
         }
         self.authored = drawing
-        self.authored_revision = drawing.revision()
+        let revision = drawing.revision()
+        self.authored_revision = revision
+        self.authored_origin_revision = revision
         self.retained = drawing.prepared(width, height)
         self.current_revision = 1
         self.drawing_width = width
@@ -61,7 +64,9 @@ public struct Canvas {
 
     init(drawing:AuthoredCanvas) {
         self.authored = drawing
-        self.authored_revision = drawing.revision()
+        let revision = drawing.revision()
+        self.authored_revision = revision
+        self.authored_origin_revision = revision
         self.retained = drawing.prepared()
         self.current_revision = 1
         self.drawing_width = 0
@@ -78,13 +83,16 @@ public struct Canvas {
     }
 
     func replace(drawing:AuthoredCanvas) {
+        let next_revision = self.revision() + 1
         self.authored = drawing
         if self.authored_revision > 0 {
             self.retained = Prepared()
         }
         self.refresh_detached()
-        self.authored_revision = -drawing.revision()
-        self.current_revision++
+        let revision = drawing.revision()
+        self.authored_revision = -revision
+        self.authored_origin_revision = revision
+        self.current_revision = next_revision
     }
 
     func snapshot() Snapshot {
@@ -94,7 +102,10 @@ public struct Canvas {
         }
         return drawing.snapshot()
     }
-    func revision() int { return self.current_revision }
+    func revision() int {
+        return self.current_revision + self.authored.revision() -
+            self.authored_origin_revision
+    }
     func width() int { return self.drawing_width }
     func height() int { return self.drawing_height }
     func is_framed() bool { return self.framed }
@@ -104,6 +115,7 @@ public struct Canvas {
     module func has_text() bool { return self.retained.has_text() }
     module func text_layers() TextLayer[] { return self.retained.text_layers() }
     module func uses_viewport() bool { return self.space == Space.viewport }
+    module func is_detached() bool { return self.authored_revision < 0 }
 
     module func synchronize() {
         let revision = self.authored.revision()
@@ -123,7 +135,6 @@ public struct Canvas {
         }
         self.authored_revision = revision
         if detached { self.authored_revision = -revision }
-        self.current_revision++
     }
 
     private func refresh_detached() {

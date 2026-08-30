@@ -33,9 +33,11 @@ test "share one retained compilation across static Canvas placements" {
 test "separate static and mutable Canvas cache identities" {
     var source = AuthoredCanvas()
     var placement = SceneCanvas(source)
+    let placement_revision = placement.revision()
     let retained_revision = placement.prepared_revision()
 
     source.clear()
+    assert(placement.revision() > placement_revision)
     placement.synchronize()
 
     assert(placement.prepared_revision() != retained_revision)
