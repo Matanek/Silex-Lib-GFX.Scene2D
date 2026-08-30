@@ -20,6 +20,7 @@ contribute GFX.Components {
 contribute GFX.Plugins {
     public use GFX.Scene2D.Grid as Grid2D
     public use GFX.Scene2D.Plugin as Scene2D
+    public use GFX.Scene2D.Plugin.Content as Scene2DContent
     public use GFX.Scene2D.ViewportCamera as ViewportCamera2D
     public use GFX.Scene2D.ViewportCamera.Controls as ViewportCamera2DControls
 }

@@ -108,30 +108,33 @@ gardent respectivement les parcours texte et géométrie/ECS.
 
 ## Étendre le renderer
 
-`Scene2D.Plugin` installe ses dépendances ECS, assets et rendu puis enregistre
+`Plugins.Scene2D` installe ses dépendances ECS, assets et rendu puis enregistre
 sa passe dans le frame graph public de `GFX.Rendering.Renderer`. Un renderer
 alternatif peut lire `snapshot()` et `revision()` sur le composant de placement.
 Le renderer intégré suit le chemin incrémental `Canvas.Prepared` sans
 matérialiser ce snapshot complet à chaque frame.
 
-Avec `GFX.Application.Scenes`, installez `Scene2D.Plugin()` sur l’Application
+Avec `Plugins.SceneManager`, installez `Plugins.Scene2D()` sur l’Application
 pour conserver la fenêtre, le GPU, les assets, le renderer et ses caches durant
-les transitions. Ajoutez ensuite `Scene2D.Content()` à chaque scène qui porte
-des composants 2D : ses systèmes consultent le `World` local sans reconstruire
-les géométries Canvas inchangées.
+les transitions. Ajoutez ensuite `Plugins.Scene2DContent()` à chaque scène qui
+porte des composants 2D : ses systèmes consultent le `World` local sans
+reconstruire les géométries Canvas inchangées. Les deux Plugins sont donc
+découvrables directement par l’auto-complétion de `GFX.Plugins`.
 
 ```sx
-application
-    ..add_plugin(Scene2D.Plugin())
-    ..add_plugin(Application.Scenes(scene))
+use GFX.Plugins
 
-scene.add_plugin(Scene2D.Content())
+application
+    ..add_plugin(Plugins.Scene2D())
+    ..add_plugin(Plugins.SceneManager(scene))
+
+scene.add_plugin(Plugins.Scene2DContent())
 ```
 
-Placez `Application.Scenes` après les Plugins de capacités globales afin que la
+Placez `Plugins.SceneManager` après les Plugins de capacités globales afin que la
 scène active soit finalisée avant leur arrêt. Une scène qui ajoute
-`Scene2D.Content()` sans que `Scene2D.Plugin()` soit installé est refusée avant
-son montage avec un diagnostic explicite.
+`Plugins.Scene2DContent()` sans que `Plugins.Scene2D()` soit installé est
+refusée avant son montage avec un diagnostic explicite.
 
 Les shaders `Drawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl` appartiennent à ce
 package. Ils ne constituent pas une API obligatoire ; une extension peut lire

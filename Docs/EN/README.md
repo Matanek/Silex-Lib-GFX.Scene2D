@@ -104,29 +104,32 @@ benchmarks guard text and geometry/ECS paths respectively.
 
 ## Extend the renderer
 
-`Scene2D.Plugin` installs its ECS, asset, and rendering dependencies and
+`Plugins.Scene2D` installs its ECS, asset, and rendering dependencies and
 registers its pass in the public `GFX.Rendering.Renderer` frame graph. An
 alternative renderer can read `snapshot()` and `revision()` from the placement
 component. The built-in renderer follows the incremental `Canvas.Prepared`
 path without materializing that complete snapshot every frame.
 
-With `GFX.Application.Scenes`, install `Scene2D.Plugin()` on the Application so
+With `Plugins.SceneManager`, install `Plugins.Scene2D()` on the Application so
 the window, GPU, assets, renderer, and its caches remain alive across
-transitions. Then add `Scene2D.Content()` to every scene that owns 2D
+transitions. Then add `Plugins.Scene2DContent()` to every scene that owns 2D
 components: its systems read the local `World` without rebuilding unchanged
-Canvas geometry.
+Canvas geometry. Both Plugins are therefore directly discoverable through
+`GFX.Plugins` completion.
 
 ```sx
-application
-    ..add_plugin(Scene2D.Plugin())
-    ..add_plugin(Application.Scenes(scene))
+use GFX.Plugins
 
-scene.add_plugin(Scene2D.Content())
+application
+    ..add_plugin(Plugins.Scene2D())
+    ..add_plugin(Plugins.SceneManager(scene))
+
+scene.add_plugin(Plugins.Scene2DContent())
 ```
 
-Place `Application.Scenes` after global capability Plugins so the active scene
-is finalized before they stop. A scene that adds `Scene2D.Content()` without an
-installed `Scene2D.Plugin()` is rejected before mounting with an explicit
+Place `Plugins.SceneManager` after global capability Plugins so the active scene
+is finalized before they stop. A scene that adds `Plugins.Scene2DContent()` without an
+installed `Plugins.Scene2D()` is rejected before mounting with an explicit
 diagnostic.
 
 The `Drawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this

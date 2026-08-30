@@ -44,7 +44,7 @@ func inspect_canvas(
     query:ECS.Query<(@LocalCanvas, @Scene2D.Canvas)>,
     renderer:@Renderer,
     probe:&Probe,
-    scenes:&Application.Scenes,
+    scenes:&Application.SceneManager,
     controller:&Application.Controller
 ) {
     var count = 0
@@ -89,7 +89,7 @@ test "reuse Canvas geometry across unchanged frames and scene replacement" {
             ..hidden = true
         ))
         ..add_plugin(Scene2D.Plugin())
-        ..add_plugin(Application.Scenes(scene))
+        ..add_plugin(Application.SceneManager(scene))
 
     assert(application.run() == 0)
     assert(probe.frames == 3)
