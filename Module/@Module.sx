@@ -2,7 +2,6 @@ public use GFX.Scene2D.Camera.Camera
 public use GFX.Scene2D.Canvas.Canvas
 public use GFX.Scene2D.Canvas.Space as CanvasSpace
 public use GFX.Scene2D.Grid.Grid
-public use GFX.Scene2D.Plugin.Content
 public use GFX.Scene2D.Plugin.Plugin
 public use GFX.Scene2D.Sampling.Sampling
 public use GFX.Scene2D.Sprite.Sprite
@@ -20,7 +19,6 @@ contribute GFX.Components {
 contribute GFX.Plugins {
     public use GFX.Scene2D.Grid as Grid2D
     public use GFX.Scene2D.Plugin as Scene2D
-    public use GFX.Scene2D.Plugin.Content as Scene2DContent
     public use GFX.Scene2D.ViewportCamera as ViewportCamera2D
     public use GFX.Scene2D.ViewportCamera.Controls as ViewportCamera2DControls
 }

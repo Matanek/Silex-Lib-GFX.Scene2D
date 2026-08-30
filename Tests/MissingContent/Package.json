@@ -1,7 +1,0 @@
-{
-  "sources": "Sources",
-  "dependencies": {
-    "GFX.Application": "^0.1.0",
-    "GFX.Scene2D": "^0.2.0"
-  }
-}

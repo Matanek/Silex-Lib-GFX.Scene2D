@@ -110,27 +110,22 @@ alternative renderer can read `snapshot()` and `revision()` from the placement
 component. The built-in renderer follows the incremental `Canvas.Prepared`
 path without materializing that complete snapshot every frame.
 
-With `Plugins.SceneManager`, install `Plugins.Scene2D()` on the Application so
+With `Plugins.BundleManager`, install `Plugins.Scene2D()` on the Application so
 the window, GPU, assets, renderer, and its caches remain alive across
-transitions. Then add `Plugins.Scene2DContent()` to every scene that owns 2D
-components: its systems read the local `World` without rebuilding unchanged
-Canvas geometry. Both Plugins are therefore directly discoverable through
-`GFX.Plugins` completion.
+transitions. `Scene2D` automatically extends Bundles with the same Plugin: its
+systems read each local `World` without another `Content` type and without
+rebuilding unchanged Canvas geometry.
 
 ```sx
 use GFX.Plugins
 
 application
     ..add_plugin(Plugins.Scene2D())
-    ..add_plugin(Plugins.SceneManager(scene))
-
-scene.add_plugin(Plugins.Scene2DContent())
+    ..add_plugin(Plugins.BundleManager(bundle))
 ```
 
-Place `Plugins.SceneManager` after global capability Plugins so the active scene
-is finalized before they stop. A scene that adds `Plugins.Scene2DContent()` without an
-installed `Plugins.Scene2D()` is rejected before mounting with an explicit
-diagnostic.
+A self-contained Bundle may instead install `Plugins.Scene2D()` directly; it
+then owns its window and rendering stack when the parent does not provide them.
 
 The `Drawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this
 package. They are not a mandatory API; an extension can read public scene data

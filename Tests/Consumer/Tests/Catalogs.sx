@@ -13,7 +13,6 @@ test "consume Scene2D directly and through the GFX catalogs" {
     let transform = Components.Transform2D()
     let camera = Components.Camera2D()
     let scene = Plugins.Scene2D()
-    let content = Plugins.Scene2DContent()
     let grid = Plugins.Grid2D()
     let viewport = Plugins.ViewportCamera2D(Plugins.ViewportCamera2D.Settings(
         zoom:2.0
@@ -25,7 +24,6 @@ test "consume Scene2D directly and through the GFX catalogs" {
     assert(transform.scale.x == 1.0)
     assert(camera.is_active())
     assert(scene.id() == "GFX.Scene2D.Plugin")
-    assert(content.id() == "GFX.Scene2D.Content")
     assert(grid.id() == "GFX.Scene2D.Grid")
     assert(viewport.id() == "GFX.Scene2D.ViewportCamera")
 }

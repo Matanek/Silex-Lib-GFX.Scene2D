@@ -44,7 +44,7 @@ func inspect_canvas(
     query:ECS.Query<(@LocalCanvas, @Scene2D.Canvas)>,
     renderer:@Renderer,
     probe:&Probe,
-    scenes:&Application.SceneManager,
+    bundles:&Application.BundleManager,
     controller:&Application.Controller
 ) {
     var count = 0
@@ -59,9 +59,8 @@ func inspect_canvas(
     probe.snapshot_counts.append(renderer.drawing_snapshot_count())
     probe.geometry_refresh_counts.append(renderer.geometry_refresh_count())
     if number.value == 1 && probe.frames == 2 {
-        scenes.request(scenes.create()
+        bundles.replace(bundles.create()
             ..add_resource(SceneNumber(value:2))
-            ..add_plugin(Scene2D.Content())
             ..add_system(Application.Schedule.startup, create_canvas)
             ..add_after_system(Application.Schedule.render, inspect_canvas)
         )
@@ -73,10 +72,8 @@ func inspect_canvas(
 test "reuse Canvas geometry across unchanged frames and scene replacement" {
     var application = Application()
     var probe = Probe()
-    var scene = Application.Scene(application)
+    var bundle = Application.Bundle(application)
         ..add_resource(SceneNumber(value:1))
-        ..add_plugin(Scene2D.Content())
-        ..add_plugin(Scene2D.Content())
         ..add_system(Application.Schedule.startup, create_canvas)
         ..add_after_system(Application.Schedule.render, inspect_canvas)
 
@@ -89,7 +86,7 @@ test "reuse Canvas geometry across unchanged frames and scene replacement" {
             ..hidden = true
         ))
         ..add_plugin(Scene2D.Plugin())
-        ..add_plugin(Application.SceneManager(scene))
+        ..add_plugin(Application.BundleManager(bundle))
 
     assert(application.run() == 0)
     assert(probe.frames == 3)

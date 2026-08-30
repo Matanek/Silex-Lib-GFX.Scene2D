@@ -114,27 +114,22 @@ alternatif peut lire `snapshot()` et `revision()` sur le composant de placement.
 Le renderer intégré suit le chemin incrémental `Canvas.Prepared` sans
 matérialiser ce snapshot complet à chaque frame.
 
-Avec `Plugins.SceneManager`, installez `Plugins.Scene2D()` sur l’Application
+Avec `Plugins.BundleManager`, installez `Plugins.Scene2D()` sur l’Application
 pour conserver la fenêtre, le GPU, les assets, le renderer et ses caches durant
-les transitions. Ajoutez ensuite `Plugins.Scene2DContent()` à chaque scène qui
-porte des composants 2D : ses systèmes consultent le `World` local sans
-reconstruire les géométries Canvas inchangées. Les deux Plugins sont donc
-découvrables directement par l’auto-complétion de `GFX.Plugins`.
+les transitions. `Scene2D` étend automatiquement les Bundles avec le même
+Plugin : leurs systèmes consultent leur `World` local sans type `Content`
+supplémentaire et sans reconstruire les géométries Canvas inchangées.
 
 ```sx
 use GFX.Plugins
 
 application
     ..add_plugin(Plugins.Scene2D())
-    ..add_plugin(Plugins.SceneManager(scene))
-
-scene.add_plugin(Plugins.Scene2DContent())
+    ..add_plugin(Plugins.BundleManager(bundle))
 ```
 
-Placez `Plugins.SceneManager` après les Plugins de capacités globales afin que la
-scène active soit finalisée avant leur arrêt. Une scène qui ajoute
-`Plugins.Scene2DContent()` sans que `Plugins.Scene2D()` soit installé est
-refusée avant son montage avec un diagnostic explicite.
+Un Bundle autonome peut aussi installer `Plugins.Scene2D()` directement ; il
+possède alors sa fenêtre et sa pile de rendu si elles ne viennent pas du parent.
 
 Les shaders `Drawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl` appartiennent à ce
 package. Ils ne constituent pas une API obligatoire ; une extension peut lire

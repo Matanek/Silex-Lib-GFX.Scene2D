@@ -6,7 +6,7 @@ use GFX.Input
 use GFX.Input.Plugin as InputPlugin
 use GFX.Input.State as InputState
 use GFX.Scene2D.Camera
-use GFX.Scene2D.Plugin as ScenePlugin
+use GFX.Scene2D.Plugin as Scene2DPlugin
 use GFX.Scene2D.Transform
 use STD.Math
 use STD.Time.Clock
@@ -152,7 +152,7 @@ public struct ViewportCamera:PluginProtocol {
 
     func build(application:&Application) {
         application.add_plugin(InputPlugin())
-        application.add_plugin(ScenePlugin())
+        application.add_plugin(Scene2DPlugin())
         application.add_resource(Controller(self.settings))
         application.add_system(Schedule.startup, create_camera)
         application.add_system(Schedule.update, update_camera)
