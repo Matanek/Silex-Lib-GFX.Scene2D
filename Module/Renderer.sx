@@ -369,7 +369,7 @@ package class Renderer {
         device:@GPU.Device,
         entity:ECS.Entity,
         transform:@Transform,
-        canvas:&SceneCanvas
+        canvas:@SceneCanvas
     ) {
         if !canvas.visible { return }
         let cache_index = self.prepared_scene_drawing_cache(
@@ -665,7 +665,7 @@ package class Renderer {
     private func prepared_scene_drawing_cache(
         device:@GPU.Device,
         entity_index:int,
-        canvas:&SceneCanvas
+        canvas:@SceneCanvas
     ) int {
         let previous_snapshot_id = canvas.prepared_revision()
         let synchronized_cache_index =
@@ -686,7 +686,7 @@ package class Renderer {
             return previous_cache_index
         }
 
-        canvas.synchronize()
+        canvas.synchronize_retained()
         self.canvas_synchronizations++
         let snapshot_id = canvas.prepared_revision()
         var cache_index = self.known_scene_drawing_cache(snapshot_id)

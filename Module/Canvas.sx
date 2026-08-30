@@ -137,6 +137,29 @@ public struct Canvas {
         if detached { self.authored_revision = -revision }
     }
 
+    // Rendering only needs to update the retained resource shared by Canvas
+    // copies. Component-local revision bookkeeping can remain unchanged, so
+    // Scene2D may collect Canvas components through a read-only query.
+    module func synchronize_retained() {
+        let revision = self.authored.revision()
+        let detached = self.authored_revision < 0
+        var tracked_revision = self.authored_revision
+        if detached { tracked_revision = -tracked_revision }
+        if revision == tracked_revision { return }
+        if detached {
+            self.refresh_detached()
+        } elif self.framed {
+            var drawing = self.authored
+            var prepared = drawing.prepared(
+                self.drawing_width,
+                self.drawing_height
+            )
+        } else {
+            var drawing = self.authored
+            var prepared = drawing.prepared()
+        }
+    }
+
     private func refresh_detached() {
         var drawing = self.authored
         var retained = self.retained
