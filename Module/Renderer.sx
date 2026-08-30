@@ -152,9 +152,12 @@ package class Renderer {
     private var quad_indices:GPU.Buffer? = null
     private var scene_drawing_cache:CachedSceneDrawing[]
     private var scene_drawing_snapshots:Dictionary<int, int>
+    private var scene_drawing_snapshot_generations:Dictionary<int, int>
     private var mutable_scene_drawings:Dictionary<int, int>
     private var last_scene_snapshot_id:int
     private var last_scene_cache_index:int
+    private var prepare_generation:int
+    private var geometry_refreshes:int
     private var image_cache:CachedImage[]
     private var image_cache_indices:Dictionary<int, int>
     private var pending_image_uploads:int[]
@@ -183,9 +186,12 @@ package class Renderer {
     init() {
         self.scene_drawing_cache = []
         self.scene_drawing_snapshots = Dictionary<int, int>(minimum_capacity:256)
+        self.scene_drawing_snapshot_generations = Dictionary<int, int>(minimum_capacity:256)
         self.mutable_scene_drawings = Dictionary<int, int>(minimum_capacity:64)
         self.last_scene_snapshot_id = -1
         self.last_scene_cache_index = -1
+        self.prepare_generation = 0
+        self.geometry_refreshes = 0
         self.image_cache = []
         self.image_cache_indices = Dictionary<int, int>(minimum_capacity:256)
         self.pending_image_uploads = []
@@ -303,6 +309,7 @@ package class Renderer {
     }
 
     func begin_prepare(window:@Window) {
+        self.prepare_generation++
         let pixels = window.pixel_size()
         self.display_scale = window.display_scale()
         if self.display_scale <= 0.0 { self.display_scale = 1.0 }
@@ -488,6 +495,7 @@ package class Renderer {
             self.rebuild_scene_entries()
         }
         self.prepare_scene_instances(device, reordered)
+        self.prune_scene_drawing_snapshots()
     }
 
     func draw(pass:@GPU.RenderPass) {
@@ -630,7 +638,13 @@ package class Renderer {
     }
 
     private func known_scene_drawing_cache(snapshot_id:int) int {
-        if snapshot_id == self.last_scene_snapshot_id {
+        if snapshot_id == self.last_scene_snapshot_id &&
+            self.scene_drawing_snapshots.contains(snapshot_id)
+        {
+            self.scene_drawing_snapshot_generations.set(
+                snapshot_id,
+                self.prepare_generation
+            )
             return self.last_scene_cache_index
         }
         if self.scene_drawing_snapshots.contains(snapshot_id) {
@@ -638,6 +652,10 @@ package class Renderer {
                 self.scene_drawing_snapshots.get(snapshot_id) + 0
             self.last_scene_snapshot_id = snapshot_id
             self.last_scene_cache_index = cache_index
+            self.scene_drawing_snapshot_generations.set(
+                snapshot_id,
+                self.prepare_generation
+            )
             return cache_index
         }
         return -1
@@ -670,9 +688,7 @@ package class Renderer {
             if !cache.mutable && cache.geometry_hash == geometry_hash &&
                 cache.packed_vertices == packed
             {
-                self.scene_drawing_snapshots.set(snapshot_id, index)
-                self.last_scene_snapshot_id = snapshot_id
-                self.last_scene_cache_index = index
+                self.remember_scene_drawing(snapshot_id, index)
                 return index
             }
             index++
@@ -686,10 +702,34 @@ package class Renderer {
         )
         self.scene_drawing_cache.append(created)
         let created_index = self.scene_drawing_cache.count() - 1
-        self.scene_drawing_snapshots.set(snapshot_id, created_index)
-        self.last_scene_snapshot_id = snapshot_id
-        self.last_scene_cache_index = created_index
+        self.remember_scene_drawing(snapshot_id, created_index)
         return created_index
+    }
+
+    private func remember_scene_drawing(snapshot_id:int, cache_index:int) {
+        self.scene_drawing_snapshots.set(snapshot_id, cache_index)
+        self.scene_drawing_snapshot_generations.set(
+            snapshot_id,
+            self.prepare_generation
+        )
+        self.last_scene_snapshot_id = snapshot_id
+        self.last_scene_cache_index = cache_index
+    }
+
+    private func prune_scene_drawing_snapshots() {
+        let snapshots = self.scene_drawing_snapshot_generations.get_keys()
+        for snapshot_id in snapshots {
+            let generation:int =
+                self.scene_drawing_snapshot_generations.get(snapshot_id) + 0
+            if generation < self.prepare_generation {
+                self.scene_drawing_snapshot_generations.remove(snapshot_id)
+                self.scene_drawing_snapshots.remove(snapshot_id)
+                if self.last_scene_snapshot_id == snapshot_id {
+                    self.last_scene_snapshot_id = -1
+                    self.last_scene_cache_index = -1
+                }
+            }
+        }
     }
 
     private func mutable_scene_drawing(
@@ -758,12 +798,19 @@ package class Renderer {
                 copy_buffer(device, upload, destination, byte_count)
             }
         }
+        self.geometry_refreshes++
         cache.dirty = false
     }
 
     package func drawing_cache_count() int {
         return self.scene_drawing_cache.count()
     }
+
+    package func drawing_snapshot_count() int {
+        return self.scene_drawing_snapshots.count()
+    }
+
+    package func geometry_refresh_count() int { return self.geometry_refreshes }
 
     package func image_cache_count() int { return self.image_cache.count() }
 

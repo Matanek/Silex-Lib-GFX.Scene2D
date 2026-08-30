@@ -1,0 +1,104 @@
+use GFX.Application
+use GFX.Canvas
+use GFX.Color
+use GFX.ECS
+use GFX.Scene2D
+use GFX.Scene2D.Renderer
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+struct SceneNumber { let value:int }
+struct LocalCanvas { let scene:int }
+
+class Probe {
+    var frames:int
+    var cache_counts:int[]
+    var snapshot_counts:int[]
+    var geometry_refresh_counts:int[]
+
+    init() {
+        self.frames = 0
+        self.cache_counts = []
+        self.snapshot_counts = []
+        self.geometry_refresh_counts = []
+    }
+}
+
+func create_canvas(number:@SceneNumber, world:&ECS.World) {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(8.0), 6.0),
+            Canvas.Fill.solid(Color.cyan_400())
+        )
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(LocalCanvas(scene:number.value))
+        ..with(Scene2D.Transform())
+        ..with(Scene2D.Canvas(drawing, 16, 16))
+    )
+}
+
+func inspect_canvas(
+    number:@SceneNumber,
+    query:ECS.Query<(@LocalCanvas, @Scene2D.Canvas)>,
+    renderer:@Renderer,
+    probe:&Probe,
+    scenes:&Application.Scenes,
+    controller:&Application.Controller
+) {
+    var count = 0
+    for (marker, canvas) in query {
+        assert(marker.scene == number.value)
+        assert(canvas.width() == 16)
+        count++
+    }
+    assert(count == 1)
+    probe.frames++
+    probe.cache_counts.append(renderer.drawing_cache_count())
+    probe.snapshot_counts.append(renderer.drawing_snapshot_count())
+    probe.geometry_refresh_counts.append(renderer.geometry_refresh_count())
+    if number.value == 1 && probe.frames == 2 {
+        scenes.request(scenes.create()
+            ..add_resource(SceneNumber(value:2))
+            ..add_plugin(Scene2D.Content())
+            ..add_system(Application.Schedule.startup, create_canvas)
+            ..add_after_system(Application.Schedule.render, inspect_canvas)
+        )
+    } elif number.value == 2 {
+        controller.stop()
+    }
+}
+
+test "reuse Canvas geometry across unchanged frames and scene replacement" {
+    var application = Application()
+    var probe = Probe()
+    var scene = Application.Scene(application)
+        ..add_resource(SceneNumber(value:1))
+        ..add_plugin(Scene2D.Content())
+        ..add_plugin(Scene2D.Content())
+        ..add_system(Application.Schedule.startup, create_canvas)
+        ..add_after_system(Application.Schedule.render, inspect_canvas)
+
+    application
+        ..add_resource(probe)
+        ..add_plugin(WindowPlugin(WindowPlugin.Settings()
+            ..title = "Scene2D application scene"
+            ..width = 32
+            ..height = 32
+            ..hidden = true
+        ))
+        ..add_plugin(Scene2D.Plugin())
+        ..add_plugin(Application.Scenes(scene))
+
+    assert(application.run() == 0)
+    assert(probe.frames == 3)
+    assert(probe.cache_counts.count() == 3)
+    assert(probe.snapshot_counts.count() == 3)
+    assert(probe.geometry_refresh_counts.count() == 3)
+    for index in 0...3 {
+        assert(probe.cache_counts[index] == 1)
+        assert(probe.snapshot_counts[index] == 1)
+        assert(probe.geometry_refresh_counts[index] == 1)
+    }
+}

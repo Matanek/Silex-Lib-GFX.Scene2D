@@ -110,6 +110,25 @@ alternative renderer can read `snapshot()` and `revision()` from the placement
 component. The built-in renderer follows the incremental `Canvas.Prepared`
 path without materializing that complete snapshot every frame.
 
+With `GFX.Application.Scenes`, install `Scene2D.Plugin()` on the Application so
+the window, GPU, assets, renderer, and its caches remain alive across
+transitions. Then add `Scene2D.Content()` to every scene that owns 2D
+components: its systems read the local `World` without rebuilding unchanged
+Canvas geometry.
+
+```sx
+application
+    ..add_plugin(Scene2D.Plugin())
+    ..add_plugin(Application.Scenes(scene))
+
+scene.add_plugin(Scene2D.Content())
+```
+
+Place `Application.Scenes` after global capability Plugins so the active scene
+is finalized before they stop. A scene that adds `Scene2D.Content()` without an
+installed `Scene2D.Plugin()` is rejected before mounting with an explicit
+diagnostic.
+
 The `Drawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this
 package. They are not a mandatory API; an extension can read public scene data
 and provide its own `GPU.ShaderProgram.hlsl`.

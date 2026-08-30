@@ -2,6 +2,7 @@ public use GFX.Scene2D.Camera.Camera
 public use GFX.Scene2D.Canvas.Canvas
 public use GFX.Scene2D.Canvas.Space as CanvasSpace
 public use GFX.Scene2D.Grid.Grid
+public use GFX.Scene2D.Plugin.Content
 public use GFX.Scene2D.Plugin.Plugin
 public use GFX.Scene2D.Sampling.Sampling
 public use GFX.Scene2D.Sprite.Sprite

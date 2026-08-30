@@ -1,5 +1,6 @@
 use GFX.Application
 use GFX.Application.Plugin as PluginProtocol
+use GFX.Application.ScenePlugin as ScenePluginProtocol
 use GFX.Application.Schedule
 use GFX.Assets.Image
 use GFX.Assets.Plugin as AssetsPlugin
@@ -17,19 +18,30 @@ use GFX.Window
 public struct Plugin:PluginProtocol {
     func id() str { return "GFX.Scene2D.Plugin" }
 
-    func build(application:&Application) {
-        application.add_plugin(ECS.Plugin())
-        application.add_plugin(AssetsPlugin())
-        application.add_plugin(Rendering.Plugin())
-        application.add_resource(Renderer())
+    func build(host:&Application) {
+        host.add_plugin(ECS.Plugin())
+        host.add_plugin(AssetsPlugin())
+        host.add_plugin(Rendering.Plugin())
+        host.add_resource(Renderer())
         {
-            var resources = application.resources()
+            var resources = host.resources()
             var renderer = resources.get_mut<Rendering.Renderer>()
             renderer.add_pass("GFX.Scene2D", render_scene)
         }
-        application.add_system(Schedule.startup, start_scene)
-        application.add_system(Schedule.render, prepare_scene)
-        application.add_system(Schedule.shutdown, stop_scene)
+        host.add_system(Schedule.startup, start_scene)
+        if !host.has_plugin("GFX.Application.Scenes") {
+            host.add_system(Schedule.render, prepare_scene)
+        }
+        host.add_system(Schedule.shutdown, stop_scene)
+    }
+}
+
+public struct Content:ScenePluginProtocol {
+    func id() str { return "GFX.Scene2D.Content" }
+
+    func build(host:&Application.Scene) {
+        host.require_application_plugin("GFX.Scene2D.Plugin")
+        host.add_system(Schedule.render, prepare_scene)
     }
 }
 
