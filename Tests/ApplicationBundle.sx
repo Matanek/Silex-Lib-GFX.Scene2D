@@ -99,3 +99,38 @@ test "reuse Canvas geometry across unchanged frames and scene replacement" {
         assert(probe.geometry_refresh_counts[index] == 1)
     }
 }
+
+func inspect_direct_canvas(
+    query:ECS.Query<(@LocalCanvas, @Scene2D.Canvas)>,
+    renderer:@Renderer,
+    controller:&Application.Controller
+) {
+    var count = 0
+    for (marker, canvas) in query {
+        assert(marker.scene == 1)
+        assert(canvas.width() == 16)
+        count++
+    }
+    assert(count == 1)
+    assert(renderer.drawing_cache_count() == 1)
+    controller.stop()
+}
+
+test "install Scene2D directly inside an Application Bundle" {
+    var application = Application()
+    var bundle = Application.Bundle(application)
+        ..add_resource(SceneNumber(value:1))
+        ..add_plugin(WindowPlugin(WindowPlugin.Settings()
+            ..title = "Bundle-owned Scene2D"
+            ..width = 32
+            ..height = 32
+            ..hidden = true
+        ))
+        ..add_plugin(Scene2D.Plugin())
+        ..add_system(Application.Schedule.startup, create_canvas)
+        ..add_after_system(Application.Schedule.render, inspect_direct_canvas)
+
+    application.add_plugin(Application.BundleManager(bundle))
+    assert(application.run() == 0)
+    assert(bundle.is_finalized())
+}
