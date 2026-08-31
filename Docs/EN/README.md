@@ -75,9 +75,11 @@ rotation, and scale in both cases.
 ## Choose text rendering
 
 Canvas text keeps `CanvasTextMode.coverage` by default. This path rasterizes
-the glyphs already shaped by `GFX.Font` with hinting, then retains the texture.
-It suits small sizes, terminals, and dense interfaces. `coverage_density`
-multiplies the window's physical density and must remain strictly positive:
+each glyph shaped by `GFX.Font` with hinting on first use, stores it in an R8
+GPU atlas, then draws visible occurrences as instanced quads. A cold scroll no
+longer recomposes one RGBA texture per line. It suits small sizes, terminals,
+and dense interfaces. `coverage_density` multiplies the window's physical
+density and must remain strictly positive:
 
 ```sx
 var label = Components.Canvas(drawing, 320, 80)
@@ -133,10 +135,13 @@ rewrites mesh values without rebuilding its capacities. Changing only a label
 uploads neither geometry nor the other text layers.
 
 Sprite and text texture identities are indexed directly, so frame preparation
-remains linear in visible draws. The vector cache retains at most 1,024 glyph
+remains linear in visible draws. The vector cache retains at most 2,048 glyph
 meshes and 256 prepared layers. After warm-up, static vector text performs no
 new shaping, decomposition, tessellation, rasterization, or pixel upload; the
-coverage path keeps its bounded hinted textures and bitmaps. The
+coverage path retains hinted glyphs in at most four 2,048 × 2,048 R8 atlas
+pages (16 MiB maximum allocation) with a bounded direct table. Canvas-local
+quad clipping preserves framed content; coverage that cannot fit the atlas
+falls back to the layer-texture path. The
 [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 and [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 benchmarks guard text and geometry/ECS paths respectively.

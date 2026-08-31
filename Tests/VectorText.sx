@@ -163,7 +163,7 @@ func verify_vector_text_cache(
     assert(renderer.coverage_raster_count() == 0)
     assert(renderer.text_uploaded_pixel_count() == 0)
     assert(renderer.glyph_mesh_count() > 0)
-    assert(renderer.glyph_mesh_count() <= 1024)
+    assert(renderer.glyph_mesh_count() <= 2048)
     assert(renderer.glyph_mesh_count() == probe.expected_meshes)
     if probe.frames == 0 {
         probe.tessellations = renderer.vector_tessellation_count()
@@ -202,6 +202,7 @@ class CoverageProbe {
     var frames:int = 0
     var rasters:int = 0
     var uploaded:int = 0
+    var instance_uploads:int = 0
 }
 
 func create_coverage_text(world:&ECS.World) {
@@ -228,13 +229,20 @@ func verify_coverage_cache(
     if probe.frames == 0 {
         probe.rasters = renderer.coverage_raster_count()
         probe.uploaded = renderer.text_uploaded_pixel_count()
-        assert(probe.rasters == 1)
+        probe.instance_uploads = renderer.coverage_instance_upload_count()
+        assert(probe.rasters > 0)
         assert(probe.uploaded > 0)
+        assert(probe.instance_uploads > 0)
+        assert(renderer.coverage_atlas_page_count() == 1)
+        assert(renderer.coverage_glyph_instance_count() > 0)
         probe.frames++
         return
     }
     assert(renderer.coverage_raster_count() == probe.rasters)
     assert(renderer.text_uploaded_pixel_count() == probe.uploaded)
+    assert(renderer.coverage_instance_upload_count() == probe.instance_uploads)
+    assert(renderer.coverage_atlas_page_count() == 1)
+    assert(renderer.coverage_glyph_instance_count() > 0)
     controller.stop()
 }
 

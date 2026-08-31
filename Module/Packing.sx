@@ -125,6 +125,48 @@ func quad_indices() str {
     return bytes
 }
 
+func bordered_coverage(alpha:@str, width:int, height:int) str {
+    let padded_width = width + 2
+    let byte_count = padded_width * (height + 2)
+    var bytes = storage(byte_count)
+    let source = C.address_bits(C.pointer(alpha))
+    let destination = C.address_bits(C.mutable_string_pointer(bytes))
+    var y = 0
+    while y < height {
+        var x = 0
+        while x < width {
+            let value = C.load<uint8>(source, (y * width + x) as uint)
+            let stored = C.store<uint8>(
+                destination,
+                ((y + 1) * padded_width + x + 1) as uint,
+                value
+            )
+            x++
+        }
+        y++
+    }
+    return bytes
+}
+
+func write_coverage_instance(
+    address:uint,
+    offset:int,
+    x:Math.Vec2,
+    y:Math.Vec2,
+    translation:Math.Vec2,
+    depth:float,
+    region:Math.Vec4,
+    color:Color
+) {
+    write_vec2(address, offset, x)
+    write_vec2(address, offset + 8, y)
+    write_vec2(address, offset + 16, translation)
+    write_float(address, offset + 24, depth)
+    write_float(address, offset + 28, 0.0)
+    write_vec4(address, offset + 32, region)
+    write_color(address, offset + 48, color)
+}
+
 func storage(minimum:int) str {
     var bytes = "\0"
     while C.byte_count(bytes) < minimum as uint { bytes = bytes + bytes }

@@ -78,8 +78,10 @@ rotation et échelle dans les deux cas.
 ## Choisir le rendu du texte
 
 Le texte Canvas conserve par défaut `CanvasTextMode.coverage`. Ce chemin
-rastérise les glyphes déjà façonnés par `GFX.Font`, avec hinting, puis retient
-la texture. Il convient aux petites tailles, aux terminaux et aux interfaces
+rastérise avec hinting chaque glyphe façonné par `GFX.Font` lors de son premier
+emploi, le range dans un atlas R8 GPU, puis dessine les occurrences visibles
+comme quads instanciés. Un scroll froid ne recompose donc plus une texture RGBA
+par ligne. Il convient aux petites tailles, aux terminaux et aux interfaces
 denses. `coverage_density` multiplie la densité physique de la fenêtre et doit
 rester strictement positif :
 
@@ -139,10 +141,13 @@ couches de texte.
 
 Les identités de textures de sprites et de textes sont indexées directement ;
 la préparation d’une frame reste linéaire selon les dessins visibles. Le cache
-vectoriel garde au plus 1 024 meshes de glyphes et 256 couches préparées. Après
+vectoriel garde au plus 2 048 meshes de glyphes et 256 couches préparées. Après
 warm-up, un texte vectoriel statique ne refaçonne, ne décompose, ne tesselle,
 ne rastérise et n'upload plus de pixels ; le chemin coverage conserve ses
-textures et bitmaps hintés bornés. Les
+glyphes hintés dans au plus quatre pages d'atlas 2 048 × 2 048 en R8 (16 Mio
+alloués au maximum), avec une table directe bornée. Le clipping est appliqué
+aux quads dans l'espace local du Canvas ; une couverture qui ne tient pas dans
+l'atlas revient au chemin de texture de couche. Les
 benchmarks [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 et [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 gardent respectivement les parcours texte et géométrie/ECS.
