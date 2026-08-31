@@ -141,7 +141,11 @@ new shaping, decomposition, tessellation, rasterization, or pixel upload; the
 coverage path retains hinted glyphs in at most four 2,048 × 2,048 R8 atlas
 pages (16 MiB maximum allocation) with a bounded direct table. Canvas-local
 quad clipping preserves framed content; coverage that cannot fit the atlas
-falls back to the layer-texture path. The
+falls back to the layer-texture path. A rectangular clip attached to a Canvas
+text command crops each visible atlas quad and its UV region in Canvas-local
+coordinates. Clipped text uses the coverage path even when the component
+otherwise requests vector outlines, preserving an exact edge without
+rebuilding glyph meshes or allocating an offscreen texture while scrolling. The
 [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 and [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 benchmarks guard text and geometry/ECS paths respectively.

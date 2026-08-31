@@ -208,13 +208,20 @@ class CoverageProbe {
 func create_coverage_text(world:&ECS.World) {
     var drawing = Canvas()
     drawing.paint(func(painter:&Canvas.Painter) {
-        painter.text("hinted 12 px", Math.Vec2(2.0), Canvas.TextStyle(size:12.0))
+        painter.text(
+            "hinted 12 px",
+            Math.Vec2(2.0),
+            Canvas.TextStyle(size:12.0),
+            clip:Canvas.Rect(Math.Vec2(2.0, 4.0), Math.Vec2(45.0, 12.0))
+        )
     })
     world.spawn(ECS.EntityRecipe()
         ..with(Components.Transform2D())
         ..with(Components.Canvas(drawing, 128, 24)
             ..space = Components.CanvasSpace.viewport
-            ..text_mode = Scene2D.CanvasTextMode.coverage
+            // Clipped text resolves through coverage even when the caller
+            // otherwise prefers vector outlines.
+            ..text_mode = Scene2D.CanvasTextMode.vector
             ..coverage_density = 2.0
         )
     )

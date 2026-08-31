@@ -147,7 +147,12 @@ ne rastérise et n'upload plus de pixels ; le chemin coverage conserve ses
 glyphes hintés dans au plus quatre pages d'atlas 2 048 × 2 048 en R8 (16 Mio
 alloués au maximum), avec une table directe bornée. Le clipping est appliqué
 aux quads dans l'espace local du Canvas ; une couverture qui ne tient pas dans
-l'atlas revient au chemin de texture de couche. Les
+l'atlas revient au chemin de texture de couche. Un découpage rectangulaire
+attaché à une commande texte Canvas retaille chaque quad visible de l'atlas et
+sa région UV dans l'espace local du Canvas. Un texte découpé emploie le chemin
+coverage même si le composant demande par ailleurs les contours vectoriels :
+le bord reste exact sans reconstruire les meshes de glyphes ni allouer une
+texture hors écran pendant le scroll. Les
 benchmarks [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 et [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 gardent respectivement les parcours texte et géométrie/ECS.

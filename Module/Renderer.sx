@@ -1,6 +1,7 @@
 use GFX.Assets.Image
 use GFX.Color
 use GFX.Canvas.TextLayer
+use GFX.Canvas.Shapes.Rect
 use GFX.Font as VectorFont
 use GFX.ECS
 use GFX.GPU
@@ -578,7 +579,10 @@ package class Renderer {
         canvas:@SceneCanvas
     ) {
         for layer in canvas.text_layers() {
-            if canvas.text_mode == TextMode.coverage {
+            // Rectangular text clipping is resolved while preparing coverage
+            // quads. This keeps the shared glyph atlas intact and avoids one
+            // offscreen texture per scrolling line.
+            if canvas.text_mode == TextMode.coverage || layer.clip() != null {
                 self.collect_coverage_text(device, entity, transform, canvas, layer)
                 continue
             }
@@ -657,6 +661,7 @@ package class Renderer {
         if runs.is_empty() { return true }
         let authored = canvas.affine_model(transform, self.viewport)
         let color = multiplied_color(layer.color(), canvas.color)
+        let clip = layer.clip()
         var layer_instances:CoverageGlyphInstance[] = []
         var layer_draws:CoverageGlyphDraw[] = []
         var current_page = -1
@@ -708,7 +713,8 @@ package class Renderer {
                     authored,
                     retained_slot,
                     position,
-                    color
+                    color,
+                    clip
                 )
                 if instance.synthesis().embolden {
                     self.append_coverage_instance(
@@ -720,7 +726,8 @@ package class Renderer {
                             position.x + Math.max(1.0, Math.round(density)) / density,
                             position.y
                         ),
-                        color
+                        color,
+                        clip
                     )
                 }
             }
@@ -928,7 +935,8 @@ package class Renderer {
         authored:AffineModel,
         slot:CoverageGlyphSlot,
         source_position:Math.Vec2,
-        color:Color
+        color:Color,
+        clip:Rect? = null
     ) {
         var position = source_position
         var size = slot.size
@@ -938,11 +946,30 @@ package class Renderer {
             slot.width as float / 2048.0,
             slot.height as float / 2048.0
         )
+        var clip_left = position.x
+        var clip_top = position.y
+        var clip_right = position.x + size.x
+        var clip_bottom = position.y + size.y
+        var clipped = false
         if canvas.is_framed() {
-            let left = Math.max(0.0, position.x)
-            let top = Math.max(0.0, position.y)
-            let right = Math.min(canvas.width() as float, position.x + size.x)
-            let bottom = Math.min(canvas.height() as float, position.y + size.y)
+            clip_left = Math.max(clip_left, 0.0)
+            clip_top = Math.max(clip_top, 0.0)
+            clip_right = Math.min(clip_right, canvas.width() as float)
+            clip_bottom = Math.min(clip_bottom, canvas.height() as float)
+            clipped = true
+        }
+        if let bounds = clip {
+            clip_left = Math.max(clip_left, bounds.position.x)
+            clip_top = Math.max(clip_top, bounds.position.y)
+            clip_right = Math.min(clip_right, bounds.position.x + bounds.size.x)
+            clip_bottom = Math.min(clip_bottom, bounds.position.y + bounds.size.y)
+            clipped = true
+        }
+        if clipped {
+            let left = clip_left
+            let top = clip_top
+            let right = clip_right
+            let bottom = clip_bottom
             if right <= left || bottom <= top { return }
             let source = size
             let start_x = (left - position.x) / source.x
