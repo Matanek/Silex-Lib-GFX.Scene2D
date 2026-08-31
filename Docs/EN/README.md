@@ -13,7 +13,7 @@ unsuffixed.
 silex install GFX.Scene2D
 ```
 
-GFX.Scene2D requires Silex 0.39.0 or newer.
+GFX.Scene2D requires Silex 0.43.0 or newer.
 
 ## Place Canvas content
 
@@ -72,6 +72,42 @@ world.spawn(ECS.EntityRecipe()
 `space` selects world or viewport presentation; `Transform2D` carries position,
 rotation, and scale in both cases.
 
+## Choose text rendering
+
+Canvas text keeps `CanvasTextMode.coverage` by default. This path rasterizes
+the glyphs already shaped by `GFX.Font` with hinting, then retains the texture.
+It suits small sizes, terminals, and dense interfaces. `coverage_density`
+multiplies the window's physical density and must remain strictly positive:
+
+```sx
+var label = Components.Canvas(drawing, 320, 80)
+label.text_mode = Scene2D.CanvasTextMode.coverage
+label.coverage_density = 2.0
+```
+
+`CanvasTextMode.vector` consumes the same `TextLayer` glyph runs and outlines.
+It fails explicitly when a visible glyph has no outline and never silently
+drops that glyph. `automatic` selects vector rendering when every non-empty
+glyph is vectorizable and otherwise falls back to faithful coverage. The
+choice does not depend on a hidden zoom threshold: requesting hinted coverage
+remains explicit and deterministic.
+
+```sx
+world.spawn(ECS.EntityRecipe()
+    ..with(Components.Transform2D())
+    ..with(Components.Canvas(drawing, 320, 80)
+        ..text_mode = Scene2D.CanvasTextMode.vector
+    )
+)
+```
+
+The vector path applies the non-zero fill rule across all contours of a glyph,
+so counters in `O` and `B` remain open. Normalized meshes are shared across
+sizes, colors, and placements. Three stable detail classes cover small text,
+ordinary drawing, and strong magnification; remaining in one class does not
+retessellate. Color, translation, rotation, and scale update only the GPU
+instance.
+
 ## Understand retention and caches
 
 The component retains the identity of the `GFX.Canvas.Canvas` it receives. If
@@ -97,7 +133,10 @@ rewrites mesh values without rebuilding its capacities. Changing only a label
 uploads neither geometry nor the other text layers.
 
 Sprite and text texture identities are indexed directly, so frame preparation
-remains linear in visible draws. The
+remains linear in visible draws. The vector cache retains at most 1,024 glyph
+meshes and 256 prepared layers. After warm-up, static vector text performs no
+new shaping, decomposition, tessellation, rasterization, or pixel upload; the
+coverage path keeps its bounded hinted textures and bitmaps. The
 [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 and [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 benchmarks guard text and geometry/ECS paths respectively.

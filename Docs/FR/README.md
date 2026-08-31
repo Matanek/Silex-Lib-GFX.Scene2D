@@ -13,7 +13,7 @@ restent sans suffixe.
 silex install GFX.Scene2D
 ```
 
-GFX.Scene2D demande Silex 0.39.0 ou une version plus récente.
+GFX.Scene2D demande Silex 0.43.0 ou une version plus récente.
 
 ## Placer du contenu Canvas
 
@@ -75,6 +75,43 @@ world.spawn(ECS.EntityRecipe()
 `space` sélectionne le monde ou le viewport ; `Transform2D` porte position,
 rotation et échelle dans les deux cas.
 
+## Choisir le rendu du texte
+
+Le texte Canvas conserve par défaut `CanvasTextMode.coverage`. Ce chemin
+rastérise les glyphes déjà façonnés par `GFX.Font`, avec hinting, puis retient
+la texture. Il convient aux petites tailles, aux terminaux et aux interfaces
+denses. `coverage_density` multiplie la densité physique de la fenêtre et doit
+rester strictement positif :
+
+```sx
+var label = Components.Canvas(drawing, 320, 80)
+label.text_mode = Scene2D.CanvasTextMode.coverage
+label.coverage_density = 2.0
+```
+
+`CanvasTextMode.vector` consomme les `GlyphRun` et contours du même
+`TextLayer`. Il échoue explicitement si un glyphe visible ne possède pas de
+contour ; il ne retire jamais silencieusement ce glyphe. `automatic` choisit le
+vectoriel lorsque tous les glyphes non vides sont vectorisables et revient à
+la couverture fidèle dans les autres cas. Ce choix ne dépend pas d'un seuil de
+zoom caché : demander une couverture hintée reste explicite et déterministe.
+
+```sx
+world.spawn(ECS.EntityRecipe()
+    ..with(Components.Transform2D())
+    ..with(Components.Canvas(drawing, 320, 80)
+        ..text_mode = Scene2D.CanvasTextMode.vector
+    )
+)
+```
+
+Le chemin vectoriel applique la règle de remplissage non-zero à tous les
+contours d'un glyphe ; les contreformes de `O` ou `B` restent donc ouvertes.
+Les meshes normalisés sont partagés entre tailles, couleurs et placements.
+Trois classes de détail stables couvrent le petit texte, le dessin courant et
+le fort agrandissement ; rester dans une classe ne retesselle pas. Une couleur,
+translation, rotation ou échelle ne modifie que l'instance GPU.
+
 ## Comprendre la rétention et les caches
 
 Le composant conserve l'identité du `GFX.Canvas.Canvas` reçu. Si le producteur
@@ -101,7 +138,11 @@ Modifier uniquement un libellé ne transfère ni la géométrie, ni les autres
 couches de texte.
 
 Les identités de textures de sprites et de textes sont indexées directement ;
-la préparation d’une frame reste linéaire selon les dessins visibles. Les
+la préparation d’une frame reste linéaire selon les dessins visibles. Le cache
+vectoriel garde au plus 1 024 meshes de glyphes et 256 couches préparées. Après
+warm-up, un texte vectoriel statique ne refaçonne, ne décompose, ne tesselle,
+ne rastérise et n'upload plus de pixels ; le chemin coverage conserve ses
+textures et bitmaps hintés bornés. Les
 benchmarks [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 et [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 gardent respectivement les parcours texte et géométrie/ECS.

@@ -12,7 +12,15 @@ public enum Space {
     viewport
 }
 
-struct AffineModel {
+// Coverage preserves hinted small text. Vector uses retained outline meshes.
+// Automatic selects vector only when every non-empty glyph has an outline.
+public enum TextMode {
+    coverage
+    vector
+    automatic
+}
+
+module struct AffineModel {
     let x:Math.Vec2
     let y:Math.Vec2
     let translation:Math.Vec2
@@ -38,6 +46,8 @@ public struct Canvas {
     var layer:int
     var depth:float
     var visible:bool
+    var text_mode:TextMode
+    var coverage_density:float
 
     init(drawing:AuthoredCanvas, width:int, height:int) {
         if width <= 0 || height <= 0 {
@@ -60,6 +70,8 @@ public struct Canvas {
         self.layer = 0
         self.depth = 0.0
         self.visible = true
+        self.text_mode = TextMode.coverage
+        self.coverage_density = 1.0
     }
 
     init(drawing:AuthoredCanvas) {
@@ -80,6 +92,8 @@ public struct Canvas {
         self.layer = 0
         self.depth = 0.0
         self.visible = true
+        self.text_mode = TextMode.coverage
+        self.coverage_density = 1.0
     }
 
     func replace(drawing:AuthoredCanvas) {

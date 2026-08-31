@@ -1,0 +1,46 @@
+use GFX.Application
+use GFX.Canvas
+use GFX.Color
+use GFX.Components
+use GFX.ECS
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+func create_scene(world:&ECS.World) {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text(
+            "office O B á",
+            Math.Vec2(4.0),
+            Canvas.TextStyle(size:22.0, color:Color.cyan_300())
+        )
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 192, 40)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.vector
+        )
+    )
+}
+
+func stop_after_render(controller:&Application.Controller) {
+    controller.stop()
+}
+
+func main() {
+    var application = Application()
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D vector text smoke"
+        ..width = 192
+        ..height = 40
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_scene)
+    application.add_after_system(Application.Schedule.render, stop_after_render)
+    assert(application.run() == 0)
+}

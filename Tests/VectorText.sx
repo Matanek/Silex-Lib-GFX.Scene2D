@@ -1,0 +1,255 @@
+use GFX.Application
+use GFX.Canvas
+use GFX.Color
+use GFX.Components
+use GFX.ECS
+use GFX.Font
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Scene2D.Renderer
+use GFX.Scene2D.VectorText
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+func required_face(result:Result<Font.Face, Font.Error>) Font.Face {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(face) => { return face }
+    }
+}
+
+func required_instance(result:Result<Font.Instance, Font.Error>) Font.Instance {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(instance) => { return instance }
+    }
+}
+
+func required_run(result:Result<Font.GlyphRun, Font.Error>) Font.GlyphRun {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(run) => { return run }
+    }
+}
+
+func required_outline(result:Result<Font.GlyphOutline?, Font.Error>) Font.GlyphOutline {
+    match result {
+        failure(error) => { panic(error.detail) }
+        success(value) => {
+            if let outline = value { return outline }
+            panic("test glyph has no vector outline")
+        }
+    }
+}
+
+func cross(a:Math.Vec2, b:Math.Vec2, point:Math.Vec2) float {
+    return (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
+}
+
+func triangle_contains(point:Math.Vec2, a:Math.Vec2, b:Math.Vec2, c:Math.Vec2) bool {
+    let first = cross(a, b, point)
+    let second = cross(b, c, point)
+    let third = cross(c, a, point)
+    let negative = first < 0.0 || second < 0.0 || third < 0.0
+    let positive = first > 0.0 || second > 0.0 || third > 0.0
+    return !(negative && positive)
+}
+
+func mesh_covers(mesh:@Canvas.Mesh, point:Math.Vec2) bool {
+    let vertices = mesh.vertices()
+    var index = 0
+    while index + 2 < vertices.count() {
+        let first = vertices[index].position
+        let second = vertices[index + 1].position
+        let third = vertices[index + 2].position
+        if triangle_contains(
+            point,
+            Math.Vec2(first.x, first.y),
+            Math.Vec2(second.x, second.y),
+            Math.Vec2(third.x, third.y)
+        ) { return true }
+        index += 3
+    }
+    return false
+}
+
+func quantized(value:float64) float {
+    return (Math.round(value * 65536.0) as int) as float / 65536.0
+}
+
+test "tessellate glyph counters with non-zero holes" {
+    var face = required_face(Font.Face.default())
+    var instance = required_instance(Font.Instance.create(face, size:32.0))
+    var run = required_run(instance.shape("O"))
+    let outline = required_outline(instance.outline(run.glyphs()[0].id))
+    let mesh = VectorText.tessellate(outline, 0.0075)
+    assert(mesh.triangle_count() > 0)
+    let center = Math.Vec2(
+        quantized(outline.bounds.x + outline.bounds.width * 0.5),
+        quantized(outline.bounds.y + outline.bounds.height * 0.5)
+    )
+    assert(!mesh_covers(mesh, center))
+}
+
+class VectorProbe {
+    var frames:int = 0
+    var tessellations:int = 0
+    var entity:ECS.Entity? = null
+    var expected_meshes:int = 0
+}
+
+func vector_mesh_count(drawing:&Canvas) int {
+    var layers = drawing.snapshot(160, 40).text_layers()
+    var glyphs:uint32[] = []
+    match layers[0].vector_outlines() {
+        failure(error) => { panic(error.detail) }
+        success(placements) => {
+            for placement in placements {
+                if let outline = placement.glyph.outline {
+                    if outline.is_empty() { continue }
+                    var known = false
+                    for glyph in glyphs {
+                        if glyph == placement.glyph.glyph_id { known = true }
+                    }
+                    if !known { glyphs.append(placement.glyph.glyph_id) }
+                }
+            }
+        }
+    }
+    return glyphs.count()
+}
+
+func create_vector_text(world:&ECS.World, probe:&VectorProbe) {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text(
+            "office O B á",
+            Math.Vec2(4.0, 4.0),
+            Canvas.TextStyle(size:18.0, color:Color.cyan_300())
+        )
+    })
+    probe.expected_meshes = vector_mesh_count(drawing)
+    probe.entity = world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 160, 32)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.vector
+        )
+    )
+    var large = Canvas()
+    large.paint(func(painter:&Canvas.Painter) {
+        painter.text(
+            "office O B á",
+            Math.Vec2(4.0),
+            Canvas.TextStyle(size:30.0, color:Color.amber_300())
+        )
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D(position:Math.Vec2(0.0, 24.0)))
+        ..with(Components.Canvas(large, 160, 40)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.automatic
+        )
+    )
+}
+
+func verify_vector_text_cache(
+    renderer:@Renderer,
+    world:&ECS.World,
+    probe:&VectorProbe,
+    controller:&Application.Controller
+) {
+    assert(renderer.vector_instance_count() > 0)
+    assert(renderer.coverage_raster_count() == 0)
+    assert(renderer.text_uploaded_pixel_count() == 0)
+    assert(renderer.glyph_mesh_count() > 0)
+    assert(renderer.glyph_mesh_count() <= 1024)
+    assert(renderer.glyph_mesh_count() == probe.expected_meshes)
+    if probe.frames == 0 {
+        probe.tessellations = renderer.vector_tessellation_count()
+        assert(probe.tessellations > 0)
+        if let entity = probe.entity {
+            world.update<Components.Transform2D>(entity, func(transform:&Components.Transform2D) {
+                transform.position = Math.Vec2(8.0, 3.0)
+                transform.rotation = 0.2
+            })
+        }
+        probe.frames++
+        return
+    }
+    assert(renderer.vector_tessellation_count() == probe.tessellations)
+    assert(renderer.vector_outline_cache_hit_count() > 0)
+    controller.stop()
+}
+
+test "reuse vector glyph meshes across transform changes without raster or upload" {
+    var application = Application()
+    application.add_resource(VectorProbe())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D vector text"
+        ..width = 160
+        ..height = 32
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_vector_text)
+    application.add_after_system(Application.Schedule.render, verify_vector_text_cache)
+    assert(application.run() == 0)
+}
+
+class CoverageProbe {
+    var frames:int = 0
+    var rasters:int = 0
+    var uploaded:int = 0
+}
+
+func create_coverage_text(world:&ECS.World) {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text("hinted 12 px", Math.Vec2(2.0), Canvas.TextStyle(size:12.0))
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 128, 24)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.coverage
+            ..coverage_density = 2.0
+        )
+    )
+}
+
+func verify_coverage_cache(
+    renderer:@Renderer,
+    probe:&CoverageProbe,
+    controller:&Application.Controller
+) {
+    assert(renderer.vector_instance_count() == 0)
+    if probe.frames == 0 {
+        probe.rasters = renderer.coverage_raster_count()
+        probe.uploaded = renderer.text_uploaded_pixel_count()
+        assert(probe.rasters == 1)
+        assert(probe.uploaded > 0)
+        probe.frames++
+        return
+    }
+    assert(renderer.coverage_raster_count() == probe.rasters)
+    assert(renderer.text_uploaded_pixel_count() == probe.uploaded)
+    controller.stop()
+}
+
+test "retain hinted coverage at explicit density without a second-frame upload" {
+    var application = Application()
+    application.add_resource(CoverageProbe())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D hinted text"
+        ..width = 128
+        ..height = 24
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_coverage_text)
+    application.add_after_system(Application.Schedule.render, verify_coverage_cache)
+    assert(application.run() == 0)
+}

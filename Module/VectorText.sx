@@ -1,0 +1,289 @@
+use GFX.Canvas.Geometry.Mesh
+use GFX.Canvas.Geometry.Vertex
+use GFX.Color
+use GFX.Font
+use STD.Math
+
+// A horizontal slab tessellator is deliberately used here instead of a
+// contour-at-a-time ear clipper. It applies the font's non-zero winding rule
+// across every contour at once, so counters such as O and B remain holes.
+struct Edge {
+    let first:Math.Vec2
+    let second:Math.Vec2
+    let winding:int
+}
+
+struct Crossing {
+    let lower_x:float
+    let upper_x:float
+    let middle_x:float
+    let winding:int
+}
+
+func tessellate(outline:Font.GlyphOutline, tolerance:float) Mesh {
+    if tolerance <= 0.0 { panic("GFX.Scene2D vector text tolerance must be positive") }
+    var edges:Edge[] = []
+    var levels:float[] = []
+    for contour in outline.contours {
+        let points = flatten(contour, tolerance)
+        if points.count() < 3 { continue }
+        var index = 0
+        while index < points.count() {
+            let next = (index + 1) % points.count()
+            let first = points[index]
+            let second = points[next]
+            if Math.abs(second.y - first.y) > 0.000001 {
+                var winding = 1
+                if second.y < first.y { winding = -1 }
+                edges.append(Edge(first:first, second:second, winding:winding))
+                levels.append(first.y)
+                levels.append(second.y)
+            }
+            index++
+        }
+    }
+    sort_values(levels)
+    let unique = unique_values(levels)
+    var vertices:Vertex[] = []
+    var indices:uint32[] = []
+    var level = 0
+    while level + 1 < unique.count() {
+        let lower = unique[level]
+        let upper = unique[level + 1]
+        if upper - lower > 0.000001 {
+            append_slab(vertices, indices, edges, lower, upper)
+        }
+        level++
+    }
+    return Mesh(vertices:vertices, indices:indices)
+}
+
+func tolerance_for_class(detail:int) float {
+    if detail <= 0 { return 0.02 }
+    if detail == 1 { return 0.0075 }
+    return 0.0025
+}
+
+local func flatten(contour:Font.OutlineContour, tolerance:float) Math.Vec2[] {
+    var result:Math.Vec2[] = []
+    var current = Math.Vec2()
+    var started = false
+    for step in contour.steps {
+        match step {
+            move_to(point) => {
+                current = vector(point)
+                result.append(current)
+                started = true
+            }
+            line_to(point) => {
+                current = vector(point)
+                append_distinct(result, current)
+            }
+            quadratic_to(curve) => {
+                if !started { continue }
+                let control = vector(curve.control)
+                let endpoint = vector(curve.endpoint)
+                let estimate = current.distance(control) + control.distance(endpoint)
+                let segments = segment_count(estimate, tolerance)
+                var index = 1
+                while index <= segments {
+                    let amount = index as float / segments as float
+                    let inverse = 1.0 - amount
+                    append_distinct(result, Math.Vec2(
+                        inverse * inverse * current.x +
+                            2.0 * inverse * amount * control.x +
+                            amount * amount * endpoint.x,
+                        inverse * inverse * current.y +
+                            2.0 * inverse * amount * control.y +
+                            amount * amount * endpoint.y
+                    ))
+                    index++
+                }
+                current = endpoint
+            }
+            cubic_to(curve) => {
+                if !started { continue }
+                let first = vector(curve.control_1)
+                let second = vector(curve.control_2)
+                let endpoint = vector(curve.endpoint)
+                let estimate = current.distance(first) + first.distance(second) +
+                    second.distance(endpoint)
+                let segments = segment_count(estimate, tolerance)
+                var index = 1
+                while index <= segments {
+                    let amount = index as float / segments as float
+                    let inverse = 1.0 - amount
+                    append_distinct(result, Math.Vec2(
+                        inverse * inverse * inverse * current.x +
+                            3.0 * inverse * inverse * amount * first.x +
+                            3.0 * inverse * amount * amount * second.x +
+                            amount * amount * amount * endpoint.x,
+                        inverse * inverse * inverse * current.y +
+                            3.0 * inverse * inverse * amount * first.y +
+                            3.0 * inverse * amount * amount * second.y +
+                            amount * amount * amount * endpoint.y
+                    ))
+                    index++
+                }
+                current = endpoint
+            }
+            close => {}
+        }
+    }
+    if result.count() > 1 && result[0].distance(result[-1]) <= 0.000001 {
+        var without_end:Math.Vec2[] = []
+        var index = 0
+        while index + 1 < result.count() {
+            without_end.append(result[index])
+            index++
+        }
+        return without_end
+    }
+    return result
+}
+
+local func segment_count(length:float, tolerance:float) int {
+    var count = Math.ceil(Math.sqrt(length / tolerance)) as int
+    if count < 2 { count = 2 }
+    if count > 64 { count = 64 }
+    return count
+}
+
+local func append_distinct(points:&Math.Vec2[], point:Math.Vec2) {
+    if points.is_empty() || points[-1].distance(point) > 0.000001 {
+        points.append(point)
+    }
+}
+
+local func vector(point:Font.Position) Math.Vec2 {
+    return Math.Vec2(coordinate(point.x), coordinate(point.y))
+}
+
+// Silex numeric casts reject silent float64 -> float32 precision loss. The
+// explicit 16-bit fixed grid is much finer than the smallest tessellation
+// tolerance while remaining exactly representable by Math.Vec2.
+func coordinate(value:float64) float {
+    let fixed = Math.round(value * 65536.0) as int
+    return fixed as float / 65536.0
+}
+
+local func append_slab(
+    vertices:&Vertex[],
+    indices:&uint32[],
+    edges:@Edge[],
+    lower:float,
+    upper:float
+) {
+    let middle = (lower + upper) * 0.5
+    var crossings:Crossing[] = []
+    for edge in edges {
+        let minimum = Math.min(edge.first.y, edge.second.y)
+        let maximum = Math.max(edge.first.y, edge.second.y)
+        if middle <= minimum || middle >= maximum { continue }
+        crossings.append(Crossing(
+            lower_x:edge_x(edge, lower),
+            upper_x:edge_x(edge, upper),
+            middle_x:edge_x(edge, middle),
+            winding:edge.winding
+        ))
+    }
+    sort_crossings(crossings)
+    var winding = 0
+    var opening:Crossing? = null
+    for crossing in crossings {
+        let previous = winding
+        winding += crossing.winding
+        if previous == 0 && winding != 0 {
+            opening = crossing
+        } elif previous != 0 && winding == 0 {
+            if let first = opening {
+                append_quad(vertices, indices, first, crossing, lower, upper)
+            }
+            opening = null
+        }
+    }
+}
+
+local func edge_x(edge:@Edge, y:float) float {
+    let amount = (y - edge.first.y) / (edge.second.y - edge.first.y)
+    return edge.first.x + (edge.second.x - edge.first.x) * amount
+}
+
+local func append_quad(
+    vertices:&Vertex[],
+    indices:&uint32[],
+    left:Crossing,
+    right:Crossing,
+    lower:float,
+    upper:float
+) {
+    if right.middle_x - left.middle_x <= 0.000001 { return }
+    append_triangle(
+        vertices,
+        indices,
+        Math.Vec2(left.lower_x, lower),
+        Math.Vec2(right.lower_x, lower),
+        Math.Vec2(right.upper_x, upper)
+    )
+    append_triangle(
+        vertices,
+        indices,
+        Math.Vec2(left.lower_x, lower),
+        Math.Vec2(right.upper_x, upper),
+        Math.Vec2(left.upper_x, upper)
+    )
+}
+
+local func append_triangle(
+    vertices:&Vertex[],
+    indices:&uint32[],
+    first:Math.Vec2,
+    second:Math.Vec2,
+    third:Math.Vec2
+) {
+    let base = vertices.count() as uint32
+    vertices.append(Vertex(position:Math.Vec3(first.x, first.y, -1.0), color:Color.white()))
+    vertices.append(Vertex(position:Math.Vec3(second.x, second.y, -1.0), color:Color.white()))
+    vertices.append(Vertex(position:Math.Vec3(third.x, third.y, -1.0), color:Color.white()))
+    indices.append(base)
+    indices.append(base + 1)
+    indices.append(base + 2)
+}
+
+local func sort_values(values:&float[]) {
+    var index = 1
+    while index < values.count() {
+        let selected = values[index]
+        var cursor = index
+        while cursor > 0 && selected < values[cursor - 1] {
+            values[cursor] = values[cursor - 1]
+            cursor--
+        }
+        values[cursor] = selected
+        index++
+    }
+}
+
+local func unique_values(values:@float[]) float[] {
+    var result:float[] = []
+    for value in values {
+        if result.is_empty() || Math.abs(result[-1] - value) > 0.000001 {
+            result.append(value)
+        }
+    }
+    return result
+}
+
+local func sort_crossings(values:&Crossing[]) {
+    var index = 1
+    while index < values.count() {
+        let selected = values[index]
+        var cursor = index
+        while cursor > 0 && selected.middle_x < values[cursor - 1].middle_x {
+            values[cursor] = values[cursor - 1]
+            cursor--
+        }
+        values[cursor] = selected
+        index++
+    }
+}

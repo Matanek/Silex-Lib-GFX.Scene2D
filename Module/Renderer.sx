@@ -1,13 +1,17 @@
 use GFX.Assets.Image
 use GFX.Color
+use GFX.Canvas.TextLayer
 use GFX.ECS
 use GFX.GPU
 use GFX.Scene2D.Camera
 use GFX.Scene2D.Canvas as SceneCanvas
+use GFX.Scene2D.Canvas.AffineModel
+use GFX.Scene2D.Canvas.TextMode
 use GFX.Scene2D.Grid
 use GFX.Scene2D.Packing
 use GFX.Scene2D.Sprite
 use GFX.Scene2D.Transform
+use GFX.Scene2D.VectorText
 use GFX.Window
 use Interop.C
 use STD.Collections.Dictionary
@@ -103,6 +107,42 @@ class CachedImage {
     }
 }
 
+class GlyphMeshSlot {
+    var key:str
+    var drawing:CachedSceneDrawing? = null
+
+    init() { self.key = "" }
+}
+
+struct VectorGlyph {
+    let key:str
+    let cache:int
+    let x:Math.Vec2
+    let y:Math.Vec2
+    let translation:Math.Vec2
+}
+
+class CachedVectorLayer {
+    let identity:int
+    let shaping_revision:int
+    let detail:int
+    let glyphs:VectorGlyph[]
+
+    init(identity:int, shaping_revision:int, detail:int, glyphs:VectorGlyph[]) {
+        self.identity = identity
+        self.shaping_revision = shaping_revision
+        self.detail = detail
+        self.glyphs = glyphs
+    }
+}
+
+class VectorLayerSlot {
+    var key:int
+    var layer:CachedVectorLayer? = null
+
+    init() { self.key = -1 }
+}
+
 func image_cache_key(kind:int, index:int, generation:int) int {
     if kind < 0 || index < 0 || generation < 0 {
         panic("GFX.Scene2D image cache keys must not be negative")
@@ -112,6 +152,7 @@ func image_cache_key(kind:int, index:int, generation:int) int {
 }
 
 struct SceneDraw {
+    let kind:int
     let cache:int
     let instance:int
     let layer:int
@@ -168,6 +209,13 @@ package class Renderer {
     private var image_cache:CachedImage[]
     private var image_cache_indices:Dictionary<int, int>
     private var pending_image_uploads:int[]
+    private var glyph_mesh_cache:GlyphMeshSlot[]
+    private var vector_layer_cache:VectorLayerSlot[]
+    private var outline_cache_hits:int
+    private var glyph_tessellations:int
+    private var vector_instances:int
+    private var coverage_rasters:int
+    private var text_pixels_uploaded:int
     private var scene_draws:SceneDraw[]
     private var scene_draw_scratch:SceneDraw[]
     private var scene_layer_counts:int[]
@@ -209,6 +257,13 @@ package class Renderer {
         self.image_cache = []
         self.image_cache_indices = Dictionary<int, int>(minimum_capacity:256)
         self.pending_image_uploads = []
+        self.glyph_mesh_cache = []
+        self.vector_layer_cache = []
+        self.outline_cache_hits = 0
+        self.glyph_tessellations = 0
+        self.vector_instances = 0
+        self.coverage_rasters = 0
+        self.text_pixels_uploaded = 0
         self.scene_draws = []
         self.scene_draw_scratch = []
         self.scene_layer_counts = []
@@ -344,6 +399,7 @@ package class Renderer {
         self.sprite_draws.clear()
         self.scene_entries.clear()
         self.pending_image_uploads.clear()
+        self.vector_instances = 0
         self.drawing_instance_write_address = 0
         if self.drawing_instance_storage_capacity >= 48 {
             var bytes = self.drawing_instance_packed
@@ -382,6 +438,7 @@ package class Renderer {
         let draw_index = self.scene_draws.count()
         self.ensure_scene_instance_storage((draw_index + 1) * 48)
         self.scene_draws.append(SceneDraw(
+            kind:0,
             cache:cache_index,
             instance:draw_index,
             layer:canvas.layer,
@@ -409,49 +466,271 @@ package class Renderer {
         transform:@Transform,
         canvas:@SceneCanvas
     ) {
-        let scale_key = Math.round(self.display_scale * 1000.0) as int
         for layer in canvas.text_layers() {
-            let image_index = self.cache_index_for_image(
-                1,
-                layer.id(),
-                scale_key
-            )
-            var image_cache = self.image_cache[image_index]
-            if image_cache.texture == null ||
-                image_cache.revision != layer.revision()
-            {
-                let text = layer.text_layer(self.display_scale)
-                self.refresh_text_image(
-                    device,
-                    image_cache,
-                    image_index,
-                    layer.revision(),
-                    text.image,
-                    "GFX.Scene2D canvas text"
-                )
-                image_cache.text_origin = text.origin
-                image_cache.text_size = text.size
+            if canvas.text_mode == TextMode.coverage {
+                self.collect_coverage_text(device, entity, transform, canvas, layer)
+                continue
             }
-            self.sprite_draws.append(SpriteDraw(
-                cache:image_index,
-                model:canvas.text_model(transform, self.viewport),
-                size:canvas.text_size(image_cache.text_size),
-                pivot:canvas.text_pivot(
-                    image_cache.text_origin,
-                    image_cache.text_size
-                ),
-                color:canvas.color,
-                region:image_cache.region(
-                    image_cache.upload_width,
-                    image_cache.upload_height
-                ),
-                sampling:0,
-                layer:canvas.layer,
-                depth:canvas.depth,
-                order:entity.index * 2 + 1,
-                viewport:canvas.uses_viewport()
-            ))
+            if self.collect_vector_text(device, entity, transform, canvas, layer) {
+                continue
+            }
+            if canvas.text_mode == TextMode.vector {
+                panic("GFX.Scene2D vector text requires an outline for every non-empty glyph")
+            }
+            self.collect_coverage_text(device, entity, transform, canvas, layer)
         }
+    }
+
+    private func collect_coverage_text(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        transform:@Transform,
+        canvas:@SceneCanvas,
+        layer:TextLayer
+    ) {
+        if canvas.coverage_density <= 0.0 {
+            panic("GFX.Scene2D Canvas coverage_density must be positive")
+        }
+        let density = self.display_scale * canvas.coverage_density
+        let scale_key = Math.round(density * 1000.0) as int
+        let image_index = self.cache_index_for_image(1, layer.id(), scale_key)
+        var image_cache = self.image_cache[image_index]
+        if image_cache.texture == null || image_cache.revision != layer.revision() {
+            let text = layer.text_layer(density)
+            self.refresh_text_image(
+                device,
+                image_cache,
+                image_index,
+                layer.revision(),
+                text.image,
+                "GFX.Scene2D canvas text"
+            )
+            image_cache.text_origin = text.origin
+            image_cache.text_size = text.size
+            self.coverage_rasters++
+        }
+        self.sprite_draws.append(SpriteDraw(
+            cache:image_index,
+            model:canvas.text_model(transform, self.viewport),
+            size:canvas.text_size(image_cache.text_size),
+            pivot:canvas.text_pivot(image_cache.text_origin, image_cache.text_size),
+            color:canvas.color,
+            region:image_cache.region(image_cache.upload_width, image_cache.upload_height),
+            sampling:0,
+            layer:canvas.layer,
+            depth:canvas.depth,
+            order:entity.index * 2 + 1,
+            viewport:canvas.uses_viewport()
+        ))
+    }
+
+    private func collect_vector_text(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        transform:@Transform,
+        canvas:@SceneCanvas,
+        layer:TextLayer,
+        retried:bool = false
+    ) bool {
+        let authored = canvas.affine_model(transform, self.viewport)
+        let detail = self.vector_detail(layer, authored)
+        var cached = self.cached_vector_layer(device, layer, detail)
+        if cached == null { return false }
+        if let vector_layer = cached {
+            let color = multiplied_color(layer.color(), canvas.color)
+            for glyph in vector_layer.glyphs {
+                if !self.glyph_cache_matches(glyph.cache, glyph.key) {
+                    if retried { return false }
+                    var refreshed = self.prepare_vector_layer(device, layer, detail)
+                    if refreshed == null { return false }
+                    return self.collect_vector_text(
+                        device,
+                        entity,
+                        transform,
+                        canvas,
+                        layer,
+                        true
+                    )
+                }
+                let model = composed_affine(authored, glyph)
+                let draw_index = self.scene_draws.count()
+                self.ensure_scene_instance_storage((draw_index + 1) * 48)
+                self.scene_draws.append(SceneDraw(
+                    kind:1,
+                    cache:glyph.cache,
+                    instance:draw_index,
+                    layer:canvas.layer,
+                    depth:canvas.depth,
+                    order:entity.index * 2 + 1,
+                    viewport:canvas.uses_viewport()
+                ))
+                Packing.write_affine_instance(
+                    self.drawing_instance_write_address,
+                    draw_index * 48,
+                    model.x,
+                    model.y,
+                    model.translation,
+                    canvas.depth,
+                    color
+                )
+                self.vector_instances++
+            }
+        }
+        return true
+    }
+
+    private func vector_detail(layer:TextLayer, authored:AffineModel) int {
+        var size = 1.0
+        var runs = layer.glyph_runs()
+        if !runs.is_empty() { size = runs[0].instance().size() as float }
+        let x_scale = Math.sqrt(authored.x.length_squared())
+        let y_scale = Math.sqrt(authored.y.length_squared())
+        let physical = Math.max(x_scale, y_scale) * size * self.display_scale
+        if physical <= 32.0 { return 0 }
+        if physical <= 96.0 { return 1 }
+        return 2
+    }
+
+    private func cached_vector_layer(
+        device:@GPU.Device,
+        layer:TextLayer,
+        detail:int
+    ) CachedVectorLayer? {
+        let key = layer.id() * 3 + detail
+        for slot in self.vector_layer_cache {
+            if slot.key == key {
+                if let cached = slot.layer {
+                    if cached.identity == layer.id() &&
+                        cached.shaping_revision == layer.shaping_revision() &&
+                        cached.detail == detail
+                    {
+                        self.outline_cache_hits++
+                        return cached
+                    }
+                }
+            }
+        }
+        return self.prepare_vector_layer(device, layer, detail)
+    }
+
+    private func prepare_vector_layer(
+        device:@GPU.Device,
+        layer:TextLayer,
+        detail:int
+    ) CachedVectorLayer? {
+        var runs = layer.glyph_runs()
+        var instance_identity = "empty"
+        var embolden = false
+        if !runs.is_empty() {
+            var instance = runs[0].instance()
+            var face = instance.face()
+            instance_identity = face.identity()
+            for variation in instance.variations() {
+                instance_identity = instance_identity +
+                    "|$(variation.tag)=$(variation.value)"
+            }
+            embolden = instance.synthesis().embolden
+        }
+        var glyphs:VectorGlyph[] = []
+        match layer.vector_outlines() {
+            failure(error) => { return null }
+            success(placements) => {
+                for placement in placements {
+                    if let outline = placement.glyph.outline {
+                        if outline.is_empty() { continue }
+                        let key = instance_identity + "|glyph=$(placement.glyph.glyph_id)|detail=$(detail)"
+                        let cache = self.glyph_mesh(device, key, outline, detail)
+                        let transform = placement.glyph.transform
+                        let placed = VectorGlyph(
+                            key:key,
+                            cache:cache,
+                            x:Math.Vec2(
+                                VectorText.coordinate(transform.xx),
+                                -VectorText.coordinate(transform.yx)
+                            ),
+                            y:Math.Vec2(
+                                VectorText.coordinate(transform.xy),
+                                -VectorText.coordinate(transform.yy)
+                            ),
+                            translation:Math.Vec2(
+                                placement.baseline.x + VectorText.coordinate(transform.dx),
+                                placement.baseline.y - VectorText.coordinate(transform.dy)
+                            )
+                        )
+                        glyphs.append(placed)
+                        if embolden {
+                            glyphs.append(VectorGlyph(
+                                key:placed.key,
+                                cache:placed.cache,
+                                x:placed.x,
+                                y:placed.y,
+                                translation:placed.translation.add(Math.Vec2(1.0, 0.0))
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        var created = CachedVectorLayer(
+            layer.id(),
+            layer.shaping_revision(),
+            detail,
+            glyphs
+        )
+        let key = layer.id() * 3 + detail
+        var slot_index = self.vector_layer_cache.count()
+        if slot_index >= 256 { slot_index = key % 256 }
+        if slot_index == self.vector_layer_cache.count() {
+            self.vector_layer_cache.append(VectorLayerSlot())
+        }
+        var slot = self.vector_layer_cache[slot_index]
+        slot.key = key
+        slot.layer = created
+        return created
+    }
+
+    private func glyph_mesh(
+        device:@GPU.Device,
+        key:str,
+        outline:GFX.Font.GlyphOutline,
+        detail:int
+    ) int {
+        var index = 0
+        while index < self.glyph_mesh_cache.count() {
+            var candidate = self.glyph_mesh_cache[index]
+            if candidate.key == key && candidate.drawing != null {
+                self.outline_cache_hits++
+                return index
+            }
+            index++
+        }
+        if self.glyph_mesh_cache.count() < 1024 {
+            self.glyph_mesh_cache.append(GlyphMeshSlot())
+            index = self.glyph_mesh_cache.count() - 1
+        } else {
+            index = (Hashing.hash(key) % 1024 as uint) as int
+        }
+        var slot = self.glyph_mesh_cache[index]
+        let mesh = VectorText.tessellate(outline, VectorText.tolerance_for_class(detail))
+        let packed = Packing.drawing_vertices(mesh)
+        var drawing = CachedSceneDrawing(
+            -1,
+            1,
+            Hashing.hash(packed),
+            packed,
+            mesh.vertex_count()
+        )
+        self.refresh_scene_geometry(device, drawing)
+        slot.key = key
+        slot.drawing = drawing
+        self.glyph_tessellations++
+        return index
+    }
+
+    private func glyph_cache_matches(index:int, key:str) bool {
+        if index < 0 || index >= self.glyph_mesh_cache.count() { return false }
+        var slot = self.glyph_mesh_cache[index]
+        return slot.key == key && slot.drawing != null
     }
 
     func collect_sprite(
@@ -542,11 +821,12 @@ package class Renderer {
             let entry = self.scene_entries[cursor]
             if entry.kind == 0 {
                 let draw = self.scene_draws[entry.index]
-                var cache = self.scene_drawing_cache[draw.cache]
+                var cache = self.drawing_for(draw)
                 var end = cursor + 1
                 while end < self.scene_entries.count() {
                     let next = self.scene_entries[end]
                     if next.kind != 0 || next.index != entry.index + end - cursor ||
+                        self.scene_draws[next.index].kind != draw.kind ||
                         self.scene_draws[next.index].cache != draw.cache ||
                         self.scene_draws[next.index].viewport != draw.viewport
                     {
@@ -587,9 +867,10 @@ package class Renderer {
         var cursor = 0
         while cursor < self.scene_draws.count() {
             let draw = self.scene_draws[cursor]
-            var cache = self.scene_drawing_cache[draw.cache]
+            var cache = self.drawing_for(draw)
             var end = cursor + 1
             while end < self.scene_draws.count() &&
+                self.scene_draws[end].kind == draw.kind &&
                 self.scene_draws[end].cache == draw.cache &&
                 self.scene_draws[end].viewport == draw.viewport
             {
@@ -613,6 +894,13 @@ package class Renderer {
             }
             cursor = end
         }
+    }
+
+    private func drawing_for(draw:@SceneDraw) CachedSceneDrawing {
+        if draw.kind == 0 { return self.scene_drawing_cache[draw.cache] }
+        var slot = self.glyph_mesh_cache[draw.cache]
+        if let drawing = slot.drawing { return drawing }
+        panic("GFX.Scene2D vector glyph cache entry was evicted during a frame")
     }
 
     private func draw_scene_sprite(pass:@GPU.RenderPass, draw:SpriteDraw) {
@@ -924,6 +1212,19 @@ package class Renderer {
 
     package func image_cache_count() int { return self.image_cache.count() }
 
+    package func vector_outline_cache_hit_count() int { return self.outline_cache_hits }
+    package func vector_tessellation_count() int { return self.glyph_tessellations }
+    package func vector_instance_count() int { return self.vector_instances }
+    package func coverage_raster_count() int { return self.coverage_rasters }
+    package func text_uploaded_pixel_count() int { return self.text_pixels_uploaded }
+    package func glyph_mesh_count() int {
+        var count = 0
+        for slot in self.glyph_mesh_cache {
+            if slot.drawing != null { count++ }
+        }
+        return count
+    }
+
     private func cache_index_for_image(
         kind:int,
         index:int,
@@ -985,6 +1286,7 @@ package class Renderer {
             cache.texture_height = height
         }
         let pixel_count = image.byte_count()
+        self.text_pixels_uploaded += image.width() * image.height()
         if cache.upload == null || cache.upload_capacity < pixel_count {
             cache.upload = device.upload_buffer(pixel_count, name + " upload")
             cache.upload_capacity = pixel_count
@@ -1222,7 +1524,37 @@ local func scene_draw_before(left:@SceneDraw, right:@SceneDraw) bool {
     if left.viewport != right.viewport { return !left.viewport }
     if left.layer != right.layer { return left.layer < right.layer }
     if left.depth != right.depth { return left.depth < right.depth }
-    return left.order < right.order
+    if left.order != right.order { return left.order < right.order }
+    if left.kind != right.kind { return left.kind < right.kind }
+    return left.cache < right.cache
+}
+
+local func composed_affine(authored:AffineModel, glyph:@VectorGlyph) AffineModel {
+    return AffineModel(
+        x:Math.Vec2(
+            authored.x.x * glyph.x.x + authored.y.x * glyph.x.y,
+            authored.x.y * glyph.x.x + authored.y.y * glyph.x.y
+        ),
+        y:Math.Vec2(
+            authored.x.x * glyph.y.x + authored.y.x * glyph.y.y,
+            authored.x.y * glyph.y.x + authored.y.y * glyph.y.y
+        ),
+        translation:Math.Vec2(
+            authored.translation.x + authored.x.x * glyph.translation.x +
+                authored.y.x * glyph.translation.y,
+            authored.translation.y + authored.x.y * glyph.translation.x +
+                authored.y.y * glyph.translation.y
+        )
+    )
+}
+
+local func multiplied_color(first:Color, second:Color) Color {
+    return Color(
+        r:first.r * second.r,
+        g:first.g * second.g,
+        b:first.b * second.b,
+        a:first.a * second.a
+    )
 }
 
 local func world_image_model(transform:@Transform) Math.Mat4 {
