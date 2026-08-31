@@ -369,6 +369,7 @@ package class Renderer {
     private var coverage_instance_uploads:int
     private var coverage_instance_allocations:int
     private var coverage_block_cache:CoverageBlockCache[]
+    private var coverage_block_cache_indices:Dictionary<int, int>
     private var coverage_block_builds:int
     private var scene_entries:SceneEntry[]
     private var drawing_instances:GPU.Buffer? = null
@@ -433,6 +434,9 @@ package class Renderer {
         self.coverage_instance_uploads = 0
         self.coverage_instance_allocations = 0
         self.coverage_block_cache = []
+        self.coverage_block_cache_indices = Dictionary<int, int>(
+            minimum_capacity:128
+        )
         self.coverage_block_builds = 0
         self.scene_entries = []
         self.drawing_instance_capacity = 0
@@ -852,6 +856,11 @@ package class Renderer {
         var cache_index = self.coverage_block_cache_index(identity)
         if cache_index < 0 {
             cache_index = self.reusable_coverage_block_cache()
+            let previous_identity = self.coverage_block_cache[cache_index].identity
+            if previous_identity > 0 {
+                self.coverage_block_cache_indices.remove(previous_identity)
+            }
+            self.coverage_block_cache_indices.set(identity, cache_index)
         }
         var cache = self.coverage_block_cache[cache_index]
         let valid = cache.identity == identity && cache.revision == revision &&
@@ -968,10 +977,8 @@ package class Renderer {
     }
 
     private func coverage_block_cache_index(identity:int) int {
-        var index = 0
-        while index < self.coverage_block_cache.count() {
-            if self.coverage_block_cache[index].identity == identity { return index }
-            index++
+        if self.coverage_block_cache_indices.contains(identity) {
+            return self.coverage_block_cache_indices.get(identity) + 0
         }
         return -1
     }
