@@ -160,11 +160,12 @@ local func vector(point:Font.Position) Math.Vec2 {
 }
 
 // Silex numeric casts reject silent float64 -> float32 precision loss. The
-// explicit 16-bit fixed grid is much finer than the smallest tessellation
-// tolerance while remaining exactly representable by Math.Vec2.
+// explicit 12-bit fixed grid is still ten times finer than the smallest
+// tessellation tolerance and remains exactly representable beyond a 4K
+// logical viewport (16,777,216 is the exact integer limit of float32).
 func coordinate(value:float64) float {
-    let fixed = Math.round(value * 65536.0) as int
-    return fixed as float / 65536.0
+    let fixed = Math.round(value * 4096.0) as int
+    return fixed as float / 4096.0
 }
 
 local func append_slab(
