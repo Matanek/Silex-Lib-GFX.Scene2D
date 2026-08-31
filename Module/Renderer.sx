@@ -977,7 +977,7 @@ package class Renderer {
     }
 
     private func reusable_coverage_block_cache() int {
-        if self.coverage_block_cache.count() < 32 {
+        if self.coverage_block_cache.count() < 128 {
             self.coverage_block_cache.append(CoverageBlockCache())
             return self.coverage_block_cache.count() - 1
         }

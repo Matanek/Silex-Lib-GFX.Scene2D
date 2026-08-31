@@ -387,11 +387,11 @@ func verify_retained_churn(
     probe:&RetainedChurnProbe,
     controller:&Application.Controller
 ) {
-    assert(renderer.coverage_block_cache_count() <= 32)
+    assert(renderer.coverage_block_cache_count() <= 128)
     assert(renderer.coverage_instance_allocation_count() == 0)
-    if probe.frames >= 48 {
-        assert(renderer.coverage_block_cache_count() == 32)
-        assert(renderer.coverage_block_build_count() >= 48)
+    if probe.frames >= 144 {
+        assert(renderer.coverage_block_cache_count() == 128)
+        assert(renderer.coverage_block_build_count() >= 144)
         assert(renderer.coverage_glyph_draw_count() <= renderer.coverage_atlas_page_count())
         controller.stop()
         return
