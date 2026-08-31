@@ -210,6 +210,7 @@ package class Renderer {
     private var image_cache_indices:Dictionary<int, int>
     private var pending_image_uploads:int[]
     private var glyph_mesh_cache:GlyphMeshSlot[]
+    private var glyph_mesh_cache_indices:Dictionary<str, int>
     private var vector_layer_cache:VectorLayerSlot[]
     private var outline_cache_hits:int
     private var glyph_tessellations:int
@@ -258,6 +259,7 @@ package class Renderer {
         self.image_cache_indices = Dictionary<int, int>(minimum_capacity:256)
         self.pending_image_uploads = []
         self.glyph_mesh_cache = []
+        self.glyph_mesh_cache_indices = Dictionary<str, int>(minimum_capacity:1024)
         self.vector_layer_cache = []
         self.outline_cache_hits = 0
         self.glyph_tessellations = 0
@@ -695,20 +697,22 @@ package class Renderer {
         outline:GFX.Font.GlyphOutline,
         detail:int
     ) int {
-        var index = 0
-        while index < self.glyph_mesh_cache.count() {
+        if self.glyph_mesh_cache_indices.contains(key) {
+            let index = self.glyph_mesh_cache_indices.get(key) + 0
             var candidate = self.glyph_mesh_cache[index]
-            if candidate.key == key && candidate.drawing != null {
+            if candidate.drawing != null {
                 self.outline_cache_hits++
                 return index
             }
-            index++
         }
+        var index = 0
         if self.glyph_mesh_cache.count() < 1024 {
             self.glyph_mesh_cache.append(GlyphMeshSlot())
             index = self.glyph_mesh_cache.count() - 1
         } else {
             index = (Hashing.hash(key) % 1024 as uint) as int
+            let previous_key = self.glyph_mesh_cache[index].key
+            if previous_key != "" { self.glyph_mesh_cache_indices.remove(previous_key) }
         }
         var slot = self.glyph_mesh_cache[index]
         let mesh = VectorText.tessellate(outline, VectorText.tolerance_for_class(detail))
@@ -723,6 +727,7 @@ package class Renderer {
         self.refresh_scene_geometry(device, drawing)
         slot.key = key
         slot.drawing = drawing
+        self.glyph_mesh_cache_indices.set(key, index)
         self.glyph_tessellations++
         return index
     }
