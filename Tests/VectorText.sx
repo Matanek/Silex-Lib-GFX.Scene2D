@@ -10,6 +10,7 @@ use GFX.Scene2D.Renderer
 use GFX.Scene2D.VectorText
 use GFX.Window.Plugin as WindowPlugin
 use STD.Math
+use STD.Text.UTF8
 
 func required_face(result:Result<Font.Face, Font.Error>) Font.Face {
     match result {
@@ -203,9 +204,11 @@ class CoverageProbe {
     var rasters:int = 0
     var uploaded:int = 0
     var instance_uploads:int = 0
+    var instance_allocations:int = 0
+    var entity:ECS.Entity? = null
 }
 
-func create_coverage_text(world:&ECS.World) {
+func create_coverage_text(world:&ECS.World, probe:&CoverageProbe) {
     var drawing = Canvas()
     drawing.paint(func(painter:&Canvas.Painter) {
         painter.text(
@@ -215,7 +218,7 @@ func create_coverage_text(world:&ECS.World) {
             clip:Canvas.Rect(Math.Vec2(2.0, 4.0), Math.Vec2(45.0, 12.0))
         )
     })
-    world.spawn(ECS.EntityRecipe()
+    probe.entity = world.spawn(ECS.EntityRecipe()
         ..with(Components.Transform2D())
         ..with(Components.Canvas(drawing, 128, 24)
             ..space = Components.CanvasSpace.viewport
@@ -229,6 +232,7 @@ func create_coverage_text(world:&ECS.World) {
 
 func verify_coverage_cache(
     renderer:@Renderer,
+    world:&ECS.World,
     probe:&CoverageProbe,
     controller:&Application.Controller
 ) {
@@ -237,20 +241,79 @@ func verify_coverage_cache(
         probe.rasters = renderer.coverage_raster_count()
         probe.uploaded = renderer.text_uploaded_pixel_count()
         probe.instance_uploads = renderer.coverage_instance_upload_count()
+        probe.instance_allocations = renderer.coverage_instance_allocation_count()
         assert(probe.rasters > 0)
         assert(probe.uploaded > 0)
         assert(probe.instance_uploads > 0)
         assert(renderer.coverage_atlas_page_count() == 1)
         assert(renderer.coverage_glyph_instance_count() > 0)
+        if let entity = probe.entity {
+            world.update<Components.Transform2D>(entity, func(transform:&Components.Transform2D) {
+                transform.position = Math.Vec2(17.0, 3.0)
+            })
+        }
         probe.frames++
         return
     }
     assert(renderer.coverage_raster_count() == probe.rasters)
     assert(renderer.text_uploaded_pixel_count() == probe.uploaded)
     assert(renderer.coverage_instance_upload_count() == probe.instance_uploads)
+    assert(renderer.coverage_instance_allocation_count() == probe.instance_allocations)
     assert(renderer.coverage_atlas_page_count() == 1)
     assert(renderer.coverage_glyph_instance_count() > 0)
     controller.stop()
+}
+
+class CoverageRingProbe {
+    var frames:int = 0
+    var entity:ECS.Entity? = null
+}
+
+func coverage_ring_drawing(frame:int) Canvas {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text(
+            "bounded coverage stream $(frame)",
+            Math.Vec2(2.0),
+            Canvas.TextStyle(size:12.0),
+            clip:Canvas.Rect(Math.Vec2(), Math.Vec2(150.0, 24.0))
+        )
+    })
+    return drawing
+}
+
+func create_coverage_ring_text(world:&ECS.World, probe:&CoverageRingProbe) {
+    var drawing = coverage_ring_drawing(0)
+    probe.entity = world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 160, 24)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.coverage
+            ..coverage_density = 2.0
+        )
+    )
+}
+
+func verify_coverage_ring(
+    renderer:@Renderer,
+    world:&ECS.World,
+    probe:&CoverageRingProbe,
+    controller:&Application.Controller
+) {
+    assert(renderer.coverage_instance_allocation_count() <= 4)
+    if probe.frames >= 12 {
+        assert(renderer.coverage_instance_allocation_count() == 4)
+        assert(renderer.coverage_instance_upload_count() >= 12)
+        controller.stop()
+        return
+    }
+    if let entity = probe.entity {
+        var drawing = coverage_ring_drawing(probe.frames + 1)
+        world.update<Components.Canvas>(entity, func(canvas:&Components.Canvas) {
+            canvas.replace(drawing)
+        })
+    }
+    probe.frames++
 }
 
 test "retain hinted coverage at explicit density without a second-frame upload" {
@@ -266,5 +329,204 @@ test "retain hinted coverage at explicit density without a second-frame upload" 
     application.add_plugin(Scene2D.Plugin())
     application.add_system(Application.Schedule.startup, create_coverage_text)
     application.add_after_system(Application.Schedule.render, verify_coverage_cache)
+    assert(application.run() == 0)
+}
+
+test "bound continuously changing coverage instances to a fixed GPU ring" {
+    var application = Application()
+    application.add_resource(CoverageRingProbe())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D bounded coverage stream"
+        ..width = 160
+        ..height = 24
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_coverage_ring_text)
+    application.add_after_system(Application.Schedule.render, verify_coverage_ring)
+    assert(application.run() == 0)
+}
+
+class RetainedChurnProbe {
+    var frames:int = 0
+    var entity:ECS.Entity? = null
+}
+
+func retained_churn_drawing(frame:int) Canvas {
+    var block = Canvas.TextBlock(
+        "retained viewport block $(frame)",
+        Canvas.TextStyle(size:14.0, line_height:19.0)
+    )
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text_block(
+            block,
+            Math.Vec2(4.0),
+            clip:Canvas.Rect(Math.Vec2(), Math.Vec2(180.0, 24.0))
+        )
+    })
+    return drawing
+}
+
+func create_retained_churn(world:&ECS.World, probe:&RetainedChurnProbe) {
+    var drawing = retained_churn_drawing(0)
+    probe.entity = world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 180, 24)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.coverage
+            ..coverage_density = 2.0
+        )
+    )
+}
+
+func verify_retained_churn(
+    renderer:@Renderer,
+    world:&ECS.World,
+    probe:&RetainedChurnProbe,
+    controller:&Application.Controller
+) {
+    assert(renderer.coverage_block_cache_count() <= 32)
+    assert(renderer.coverage_instance_allocation_count() == 0)
+    if probe.frames >= 48 {
+        assert(renderer.coverage_block_cache_count() == 32)
+        assert(renderer.coverage_block_build_count() >= 48)
+        assert(renderer.coverage_glyph_draw_count() <= renderer.coverage_atlas_page_count())
+        controller.stop()
+        return
+    }
+    if let entity = probe.entity {
+        var drawing = retained_churn_drawing(probe.frames + 1)
+        world.update<Components.Canvas>(entity, func(canvas:&Components.Canvas) {
+            canvas.replace(drawing)
+        })
+    }
+    probe.frames++
+}
+
+test "bound retained text block GPU caches during long scrolling churn" {
+    var application = Application()
+    application.add_resource(RetainedChurnProbe())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D retained block churn"
+        ..width = 180
+        ..height = 24
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_retained_churn)
+    application.add_after_system(Application.Schedule.render, verify_retained_churn)
+    assert(application.run() == 0)
+}
+
+struct AtlasCorpus {
+    let ordered:str
+    let alternating:str
+}
+
+func atlas_scalar_text(scalar:uint32) str {
+    var scalars:uint32[] = [scalar]
+    match UTF8.from_scalars(@scalars[0:scalars.count()]) {
+        failure(error) => { panic("invalid atlas test scalar $(scalar)") }
+        success(value) => { return value }
+    }
+}
+
+func atlas_corpus() AtlasCorpus {
+    var face = required_face(Font.Face.default())
+    var glyphs:str[] = []
+    var scalar:uint32 = 33
+    while scalar <= 2_047 as uint32 && glyphs.count() < 20 {
+        let control = scalar >= 127 as uint32 && scalar <= 160 as uint32
+        if !control && face.supports(scalar) {
+            glyphs.append(atlas_scalar_text(scalar))
+        }
+        scalar++
+    }
+    assert(glyphs.count() == 20)
+    var ordered = ""
+    for glyph in glyphs { ordered = ordered + glyph }
+    var alternating = ""
+    var index = 0
+    while index < glyphs.count() / 2 {
+        alternating = alternating + glyphs[index]
+        alternating = alternating + glyphs[glyphs.count() - index - 1]
+        index++
+    }
+    return AtlasCorpus(ordered:ordered, alternating:alternating)
+}
+
+class AtlasBatchProbe {
+    var frames:int = 0
+    var entity:ECS.Entity? = null
+}
+
+func atlas_block_drawing(value:str) Canvas {
+    var block = Canvas.TextBlock(
+        value,
+        Canvas.TextStyle(size:256.0, line_height:292.0)
+    )
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text_block(
+            block,
+            Math.Vec2(),
+            clip:Canvas.Rect(Math.Vec2(), Math.Vec2(256.0, 64.0))
+        )
+    })
+    return drawing
+}
+
+func create_atlas_batch_text(world:&ECS.World, probe:&AtlasBatchProbe) {
+    let corpus = atlas_corpus()
+    var drawing = atlas_block_drawing(corpus.ordered)
+    probe.entity = world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 256, 64)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.coverage
+            ..coverage_density = 2.0
+        )
+    )
+}
+
+func verify_atlas_page_batching(
+    renderer:@Renderer,
+    world:&ECS.World,
+    probe:&AtlasBatchProbe,
+    controller:&Application.Controller
+) {
+    if probe.frames == 0 {
+        assert(renderer.coverage_atlas_page_count() > 1)
+        if let entity = probe.entity {
+            let corpus = atlas_corpus()
+            var drawing = atlas_block_drawing(corpus.alternating)
+            world.update<Components.Canvas>(entity, func(canvas:&Components.Canvas) {
+                canvas.replace(drawing)
+            })
+        }
+        probe.frames++
+        return
+    }
+    assert(renderer.coverage_glyph_draw_count() > 1)
+    assert(renderer.coverage_glyph_draw_count() <= renderer.coverage_atlas_page_count())
+    controller.stop()
+}
+
+test "batch retained coverage by atlas page after the atlas grows" {
+    var application = Application()
+    application.add_resource(AtlasBatchProbe())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D atlas page batching"
+        ..width = 256
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_atlas_batch_text)
+    application.add_after_system(Application.Schedule.render, verify_atlas_page_batching)
     assert(application.run() == 0)
 }

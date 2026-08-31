@@ -42,6 +42,24 @@ func view_projection(value:Math.Mat4) str {
     return bytes
 }
 
+func coverage_draw_uniform(
+    view_projection:Math.Mat4,
+    model_x:Math.Vec2,
+    model_y:Math.Vec2,
+    model_translation:Math.Vec2,
+    clip:Math.Vec4
+) str {
+    var bytes = storage(112)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_mat4(address, 0, view_projection)
+    write_vec2(address, 64, model_x)
+    write_vec2(address, 72, model_y)
+    write_vec2(address, 80, model_translation)
+    write_vec2(address, 88, Math.Vec2())
+    write_vec4(address, 96, clip)
+    return bytes
+}
+
 func grid(inverse_view_projection:Math.Mat4, value:Grid) str {
     var bytes = storage(144)
     let address = C.address_bits(C.mutable_string_pointer(bytes))
