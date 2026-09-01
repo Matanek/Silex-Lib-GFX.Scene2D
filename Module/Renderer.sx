@@ -57,13 +57,11 @@ class CachedSceneDrawing {
     func replace(
         snapshot_id:int,
         geometry_revision:int,
-        geometry_hash:uint,
         packed_vertices:str,
         vertex_count:int
     ) {
         self.snapshot_id = snapshot_id
         self.geometry_revision = geometry_revision
-        self.geometry_hash = geometry_hash
         self.packed_vertices = packed_vertices
         self.vertex_count = vertex_count
         self.dirty = true
@@ -1884,7 +1882,8 @@ package class Renderer {
         var created = CachedSceneDrawing(
             canvas.prepared_revision(),
             canvas.geometry_revision(),
-            Hashing.hash(packed),
+            // Mutable drawings never participate in content-hash deduplication.
+            0,
             packed,
             geometry.vertex_count(),
             mutable:true
@@ -1905,11 +1904,9 @@ package class Renderer {
         }
         let geometry = canvas.geometry()
         var packed = Packing.drawing_vertices(geometry)
-        let geometry_hash = Hashing.hash(packed)
         cache.replace(
             canvas.prepared_revision(),
             canvas.geometry_revision(),
-            geometry_hash,
             move packed,
             geometry.vertex_count()
         )
