@@ -95,6 +95,43 @@ placement comme pour un sprite. Le mode d’échantillonnage initial est
 que `cell_origin(column, row)` retourne l’origine locale d’une cellule. Une
 coordonnée hors grille renvoie `null` pour le hit-test et provoque une erreur
 explicite pour `tile`, `set`, `clear` ou `cell_origin`.
+`Camera.unproject()` effectue l’opération inverse pour le hit-test. Elle
+emploie le même fallback de viewport que `project()` et renvoie `null` si la
+transformation n’est pas inversible.
+
+## Borner une caméra navigable
+
+Le contrôleur de `Plugins.ViewportCamera2D` peut recevoir les limites du
+contenu en unités monde. Il centre un axe plus petit que le viewport et borne
+un axe plus grand d’après le zoom courant. `overscroll` ajoute une marge monde
+facultative aux extrêmes ; elle reste indépendante de la densité physique.
+
+```sx
+use GFX.Input
+use GFX.Plugins
+use STD.Math
+
+let controls = Plugins.ViewportCamera2DControls(
+    pan:Input.MouseButton.middle,
+    scroll:Plugins.ViewportCamera2DScroll.pan
+)
+let camera_plugin = Plugins.ViewportCamera2D(
+    Plugins.ViewportCamera2D.Settings(
+        controls:controls,
+        overscroll:Math.Vec2(100.0)
+    )
+)
+
+controller.set_limits(Math.Rect(0.0, 0.0, board_width, board_height))
+let world_point = camera.unproject(pointer, transform, window.size())!
+controller.clear_limits()
+```
+
+Le scroll conserve le zoom par défaut. Le choix explicite `pan` consomme ses
+deux axes et applique `pan_sensitivity / zoom`, comme le drag configuré. Un
+resize, un changement de zoom ou de limites reborne immédiatement la position
+courante et la position désirée ; le lissage ne publie donc jamais un
+overshoot durable.
 
 ## Placer une interface dans le viewport
 

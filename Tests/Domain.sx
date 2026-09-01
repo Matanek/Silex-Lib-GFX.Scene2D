@@ -57,6 +57,26 @@ test "project positive world Y toward the top of the viewport" {
     assert(above.y < center.y)
 }
 
+test "round trip between world and viewport coordinates" {
+    let camera = Camera(zoom:2.5, viewport_size:Math.Vec2(320.0, 180.0))
+    let transform = Transform(
+        position:Math.Vec2(14.0, -9.0),
+        rotation:0.35,
+        scale:Math.Vec2(1.5, 0.75)
+    )
+    let point = Math.Vec2(36.0, 18.0)
+    let viewport = camera.project(point, transform, Math.Vec2(1.0))!
+    let restored = camera.unproject(viewport, transform, Math.Vec2(1.0))!
+    assert(restored.nearly_equal(point, 0.0001))
+
+    let fallback_camera = Camera(zoom:0.75)
+    let fallback = Math.Vec2(640.0, 360.0)
+    let projected = fallback_camera.project(point, Transform(), fallback)!
+    assert(fallback_camera.unproject(projected, Transform(), fallback)!
+        .nearly_equal(point, 0.0001))
+    assert(camera.unproject(viewport, Transform(scale:Math.Vec2(0.0, 1.0)), fallback) == null)
+}
+
 test "canvas model preserves 2D pivot scale rotation and depth" {
     var drawing = SceneCanvas(AuthoredCanvas(), 20, 10)
     drawing.size = Math.Vec2(40.0, 30.0)

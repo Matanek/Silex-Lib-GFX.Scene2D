@@ -90,6 +90,42 @@ to `Sampling.pixelated`.
 `cell_origin(column, row)` returns a cell's local origin. Out-of-grid input
 returns `null` for hit testing and fails explicitly for `tile`, `set`, `clear`,
 or `cell_origin`.
+`Camera.unproject()` performs the inverse operation for hit testing. It uses
+the same viewport fallback as `project()` and returns `null` when the transform
+cannot be inverted.
+
+## Bound a navigable camera
+
+The `Plugins.ViewportCamera2D` controller accepts content bounds in world
+units. It centers an axis that is smaller than the viewport and clamps a larger
+axis from the current zoom. `overscroll` adds an optional world-space margin at
+the extremes and remains independent from physical display density.
+
+```sx
+use GFX.Input
+use GFX.Plugins
+use STD.Math
+
+let controls = Plugins.ViewportCamera2DControls(
+    pan:Input.MouseButton.middle,
+    scroll:Plugins.ViewportCamera2DScroll.pan
+)
+let camera_plugin = Plugins.ViewportCamera2D(
+    Plugins.ViewportCamera2D.Settings(
+        controls:controls,
+        overscroll:Math.Vec2(100.0)
+    )
+)
+
+controller.set_limits(Math.Rect(0.0, 0.0, board_width, board_height))
+let world_point = camera.unproject(pointer, transform, window.size())!
+controller.clear_limits()
+```
+
+Scroll keeps zooming by default. Explicit `pan` consumes both axes and applies
+`pan_sensitivity / zoom`, like the configured drag. A resize, zoom change, or
+bounds change immediately reclamps both current and desired positions, so
+smoothing never publishes a persistent overshoot.
 
 ## Place an interface in the viewport
 

@@ -26,6 +26,7 @@ contribute GFX.Plugins {
     public use GFX.Scene2D.Plugin as Scene2D
     public use GFX.Scene2D.ViewportCamera as ViewportCamera2D
     public use GFX.Scene2D.ViewportCamera.Controls as ViewportCamera2DControls
+    public use GFX.Scene2D.ViewportCamera.Scroll as ViewportCamera2DScroll
 }
 
 contribute GFX.Resources {
