@@ -4,6 +4,9 @@ use GFX.Scene2D.Grid
 use GFX.Scene2D.Sampling
 use GFX.Scene2D.Sprite
 use GFX.Scene2D.Transform
+use GFX.Scene2D.TileAtlas
+use GFX.Scene2D.TileMap
+use GFX.Assets.Image
 use STD.Math
 use GFX.Canvas.Canvas as AuthoredCanvas
 
@@ -98,4 +101,53 @@ test "place an unbounded canvas directly from its local origin" {
         Math.Vec2(-6.0, -2.0),
         Math.Vec2(12.0, 8.0)
     ) == Math.Vec2(0.5, 0.25))
+}
+
+test "retain sparse tile fields and map local coordinates" {
+    var images = Image.Store()
+    let image = images.add(Image())
+    let atlas = TileAtlas(image, 8, 8)
+    var field = TileMap(atlas, 64, 48)
+
+    assert(field.columns() == 64)
+    assert(field.rows() == 48)
+    assert(field.size() == Math.Vec2(512.0, 384.0))
+    assert(field.tile(7, 3) == null)
+    let original_revision = field.revision()
+    field.set(7, 3, 5)
+    assert(field.tile(7, 3)! == 5)
+    assert(field.revision() == original_revision + 1)
+    field.set(7, 3, 5)
+    assert(field.revision() == original_revision + 1)
+    field.clear(7, 3)
+    assert(field.tile(7, 3) == null)
+
+    let coordinate = field.coordinate_at(Math.Vec2(63.0, 31.0))!
+    assert(coordinate.column == 7)
+    assert(coordinate.row == 3)
+    assert(field.cell_origin(7, 3) == Math.Vec2(56.0, 24.0))
+    assert(field.cell_center(7, 3) == Math.Vec2(60.0, 28.0))
+    assert(field.coordinate_at(Math.Vec2(-0.1, 0.0)) == null)
+    assert(field.coordinate_at(field.size()) == null)
+}
+
+test "bound tile preparation to the guarded visible cell range" {
+    var images = Image.Store()
+    let atlas = TileAtlas(images.add(Image()), 16, 16)
+    let field = TileMap(atlas, 10_000, 10_000)
+
+    let middle = field.visible_range(
+        Math.Vec2(1600.0, 3200.0),
+        Math.Vec2(1760.0, 3360.0)
+    )
+    assert(middle.first_column == 99)
+    assert(middle.first_row == 199)
+    assert(middle.last_column == 111)
+    assert(middle.last_row == 211)
+
+    let edge = field.visible_range(Math.Vec2(-100.0), Math.Vec2(8.0))
+    assert(edge.first_column == 0)
+    assert(edge.first_row == 0)
+    assert(edge.last_column == 2)
+    assert(edge.last_row == 2)
 }

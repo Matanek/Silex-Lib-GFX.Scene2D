@@ -121,6 +121,33 @@ func scene_sprite_uniform(
     return bytes
 }
 
+func tile_map_uniform(
+    model:Math.Mat4,
+    view_projection:Math.Mat4,
+    size:Math.Vec2,
+    color:Color,
+    depth:float
+) str {
+    var bytes = storage(160)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_mat4(address, 0, model)
+    write_mat4(address, 64, view_projection)
+    write_vec2(address, 128, size)
+    write_vec2(address, 136, Math.Vec2(depth, 0.0))
+    write_color(address, 144, color)
+    return bytes
+}
+
+func write_tile_instance(
+    address:uint,
+    offset:int,
+    translation:Math.Vec2,
+    region:Math.Vec4
+) {
+    write_vec2(address, offset, translation)
+    write_vec4(address, offset + 8, region)
+}
+
 func quad_vertices() str {
     var bytes = storage(64)
     let address = C.address_bits(C.mutable_string_pointer(bytes))

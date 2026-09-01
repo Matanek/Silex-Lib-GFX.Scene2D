@@ -11,6 +11,7 @@ use GFX.Scene2D.Camera as SceneCamera
 use GFX.Scene2D.Canvas as SceneCanvas
 use GFX.Scene2D.Renderer
 use GFX.Scene2D.Sprite as SceneSprite
+use GFX.Scene2D.TileMap as SceneTileMap
 use GFX.Scene2D.Transform
 use GFX.Window
 
@@ -55,6 +56,7 @@ func prepare_scene(
     device:@GPU.Device,
     canvases:ECS.Query<(ECS.Entity, @Transform, @SceneCanvas)>,
     sprites:ECS.Query<(ECS.Entity, @Transform, @SceneSprite)>,
+    tile_maps:ECS.Query<(ECS.Entity, @Transform, @SceneTileMap)>,
     cameras:ECS.Query<(@Transform, @SceneCamera)>,
     window:@Window,
     images:@Image.Store,
@@ -69,6 +71,9 @@ func prepare_scene(
     }
     for (entity, transform, sprite) in sprites {
         renderer.collect_sprite(device, entity, transform, sprite, images)
+    }
+    for (entity, transform, tile_map) in tile_maps {
+        renderer.collect_tile_map(device, entity, transform, tile_map, images)
     }
     renderer.finish_prepare(device)
 }

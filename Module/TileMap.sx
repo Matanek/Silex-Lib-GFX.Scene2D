@@ -1,0 +1,186 @@
+use GFX.Color
+use GFX.Scene2D.Sampling
+use GFX.Scene2D.TileAtlas
+use STD.Math
+
+public struct TileCoordinate {
+    let column:int
+    let row:int
+}
+
+module struct TileRange {
+    let first_column:int
+    let first_row:int
+    let last_column:int
+    let last_row:int
+
+    func is_empty() bool {
+        return self.first_column >= self.last_column ||
+            self.first_row >= self.last_row
+    }
+}
+
+// One retained component owns the whole logical grid. Empty cells are kept
+// internally and never become ECS entities or GPU instances.
+public struct TileMap {
+    private let tile_atlas:TileAtlas
+    private let column_count:int
+    private let row_count:int
+    private var cells:int[]
+    private var current_revision:int
+    var color:Color
+    var layer:int
+    var depth:float
+    var visible:bool
+    private var current_sampling:Sampling
+
+    init(atlas:TileAtlas, columns:int, rows:int) {
+        if columns <= 0 || rows <= 0 {
+            panic("GFX.Scene2D.TileMap dimensions must be positive")
+        }
+        self.tile_atlas = atlas
+        self.column_count = columns
+        self.row_count = rows
+        self.cells = empty_tile_cells(columns * rows)
+        self.current_revision = 1
+        self.color = Color.white()
+        self.layer = 0
+        self.depth = 0.0
+        self.visible = true
+        self.current_sampling = Sampling.pixelated
+    }
+
+    func atlas() TileAtlas { return self.tile_atlas }
+    func columns() int { return self.column_count }
+    func rows() int { return self.row_count }
+    func revision() int { return self.current_revision }
+    func size() Math.Vec2 {
+        return Math.Vec2(
+            self.column_count * self.tile_atlas.tile_width() as float,
+            self.row_count * self.tile_atlas.tile_height() as float
+        )
+    }
+
+    func contains(column:int, row:int) bool {
+        return column >= 0 && row >= 0 &&
+            column < self.column_count && row < self.row_count
+    }
+
+    func tile(column:int, row:int) int? {
+        self.require_cell(column, row)
+        let selected = self.cells[row * self.column_count + column]
+        if selected < 0 { return null }
+        return selected
+    }
+
+    func set(column:int, row:int, tile:int) {
+        self.require_cell(column, row)
+        if tile < 0 { panic("GFX.Scene2D.TileMap tile indices must not be negative") }
+        let index = row * self.column_count + column
+        if self.cells[index] == tile { return }
+        self.cells[index] = tile
+        self.current_revision++
+    }
+
+    func clear(column:int, row:int) {
+        self.require_cell(column, row)
+        let index = row * self.column_count + column
+        if self.cells[index] < 0 { return }
+        self.cells[index] = -1
+        self.current_revision++
+    }
+
+    func clear() {
+        var changed = false
+        var index = 0
+        while index < self.cells.count() {
+            if self.cells[index] >= 0 {
+                self.cells[index] = -1
+                changed = true
+            }
+            index++
+        }
+        if changed { self.current_revision++ }
+    }
+
+    func fill(tile:int) {
+        if tile < 0 { panic("GFX.Scene2D.TileMap tile indices must not be negative") }
+        var changed = false
+        var index = 0
+        while index < self.cells.count() {
+            if self.cells[index] != tile {
+                self.cells[index] = tile
+                changed = true
+            }
+            index++
+        }
+        if changed { self.current_revision++ }
+    }
+
+    func coordinate_at(point:Math.Vec2) TileCoordinate? {
+        if point.x < 0.0 || point.y < 0.0 { return null }
+        let column = Math.floor(point.x / self.tile_atlas.tile_width() as float) as int
+        let row = Math.floor(point.y / self.tile_atlas.tile_height() as float) as int
+        if !self.contains(column, row) { return null }
+        return TileCoordinate(column:column, row:row)
+    }
+
+    func cell_origin(column:int, row:int) Math.Vec2 {
+        self.require_cell(column, row)
+        return Math.Vec2(
+            column * self.tile_atlas.tile_width() as float,
+            row * self.tile_atlas.tile_height() as float
+        )
+    }
+
+    func cell_center(column:int, row:int) Math.Vec2 {
+        return self.cell_origin(column, row).add(
+            self.tile_atlas.tile_size().multiply(0.5)
+        )
+    }
+
+    func sampling(value:Sampling) { self.current_sampling = value }
+    func sampling() Sampling { return self.current_sampling }
+
+    module func sampling_mode() int {
+        if self.current_sampling == Sampling.pixelated { return 1 }
+        return 0
+    }
+
+    module func visible_range(minimum:Math.Vec2, maximum:Math.Vec2) TileRange {
+        let width = self.tile_atlas.tile_width() as float
+        let height = self.tile_atlas.tile_height() as float
+        var first_column = Math.floor(minimum.x / width) as int - 1
+        var first_row = Math.floor(minimum.y / height) as int - 1
+        var last_column = Math.ceil(maximum.x / width) as int + 1
+        var last_row = Math.ceil(maximum.y / height) as int + 1
+        first_column = clamp_index(first_column, self.column_count)
+        first_row = clamp_index(first_row, self.row_count)
+        last_column = clamp_index(last_column, self.column_count)
+        last_row = clamp_index(last_row, self.row_count)
+        return TileRange(
+            first_column:first_column,
+            first_row:first_row,
+            last_column:last_column,
+            last_row:last_row
+        )
+    }
+
+    private func require_cell(column:int, row:int) {
+        if !self.contains(column, row) {
+            panic("GFX.Scene2D.TileMap cell coordinates are outside the grid")
+        }
+    }
+}
+
+local func clamp_index(value:int, limit:int) int {
+    if value < 0 { return 0 }
+    if value > limit { return limit }
+    return value
+}
+
+local func empty_tile_cells(count:int) int[] {
+    var result:int[] = []
+    while result.count() < count { result.append(-1) }
+    return result
+}

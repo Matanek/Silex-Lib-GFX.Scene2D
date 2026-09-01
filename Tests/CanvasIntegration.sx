@@ -6,6 +6,7 @@ use GFX.Components
 use GFX.ECS
 use GFX.Rendering
 use GFX.Scene2D
+use GFX.Scene2D.Renderer
 use GFX.Window.Plugin as WindowPlugin
 use STD.Math
 
@@ -80,9 +81,28 @@ func create_scene(world:&ECS.World, images:&Image.Store) {
         ..with(Scene2D.Transform(position:Math.Vec2(0.0, 16.0)))
         ..with(Scene2D.Sprite(image:image, size:Math.Vec2(8.0)))
     )
+    var tiles = Scene2D.TileMap(Scene2D.TileAtlas(image, 1, 1), 8, 8)
+    tiles.set(0, 0, 0)
+    tiles.set(7, 7, 0)
+    world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform(position:Math.Vec2(-4.0, -4.0)))
+        ..with(tiles)
+    )
 }
 
-func stop_after_render(controller:&Application.Controller) {
+struct FrameCount { var value:int }
+
+func verify_after_render(
+    renderer:@Renderer,
+    frames:&FrameCount,
+    controller:&Application.Controller
+) {
+    frames.value++
+    if frames.value < 2 { return }
+    assert(renderer.tile_instance_count() == 2)
+    assert(renderer.tile_draw_count() == 1)
+    assert(renderer.tile_instance_upload_count() == 1)
+    assert(renderer.tile_instance_allocation_count() == 1)
     controller.stop()
 }
 
@@ -98,7 +118,8 @@ test "render retained canvases and sprites through Scene2D" {
         ..clear = Color.black()
     ))
     application.add_plugin(Scene2D.Plugin())
+    application.add_resource(FrameCount())
     application.add_system(Application.Schedule.startup, create_scene)
-    application.add_after_system(Application.Schedule.render, stop_after_render)
+    application.add_after_system(Application.Schedule.render, verify_after_render)
     assert(application.run() == 0)
 }

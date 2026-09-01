@@ -1,0 +1,77 @@
+use GFX.Application
+use GFX.Assets.Image
+use GFX.Color
+use GFX.ECS
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Scene2D.Renderer
+use GFX.Scene2D.TileMap
+use GFX.Scene2D.Transform
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+struct TileFrame { var value:int }
+
+func two_tile_image() Image {
+    var pixels:uint8[] = []
+    var index = 0
+    while index < 32 {
+        if index % 8 < 4 {
+            pixels.append(32 as uint8); pixels.append(96 as uint8)
+            pixels.append(160 as uint8); pixels.append(255 as uint8)
+        } else {
+            pixels.append(240 as uint8); pixels.append(192 as uint8)
+            pixels.append(48 as uint8); pixels.append(255 as uint8)
+        }
+        index++
+    }
+    return Image.rgba8(8, 4, pixels)
+}
+
+func create_tile_field(world:&ECS.World, images:&Image.Store) {
+    let atlas = Scene2D.TileAtlas(images.add(two_tile_image()), 4, 4)
+    var tiles = Scene2D.TileMap(atlas, 256, 256)
+    tiles.fill(0)
+    world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform(position:Math.Vec2(-512.0)))
+        ..with(tiles)
+    )
+    world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform())
+        ..with(Scene2D.Camera())
+    )
+}
+
+func verify_tile_case(
+    renderer:@Renderer,
+    frames:&TileFrame,
+    controller:&Application.Controller
+) {
+    frames.value++
+    assert(renderer.tile_draw_count() == 1)
+    assert(renderer.tile_instance_count() > 0)
+    assert(renderer.tile_instance_count() < 2_000)
+    assert(renderer.tile_instance_allocation_count() == 1)
+    if frames.value == 2 {
+        assert(renderer.tile_instance_upload_count() == 1)
+        controller.stop()
+    }
+}
+
+test "cull a large tile field and retain unchanged visible uploads" {
+    var application = Application()
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D TileMap integration"
+        ..width = 128
+        ..height = 128
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin(Rendering.Plugin.Settings()
+        ..clear = Color.black()
+    ))
+    application.add_plugin(Scene2D.Plugin())
+    application.add_resource(TileFrame())
+    application.add_system(Application.Schedule.startup, create_tile_field)
+    application.add_after_system(Application.Schedule.render, verify_tile_case)
+    assert(application.run() == 0)
+}

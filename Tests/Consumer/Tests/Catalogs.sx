@@ -1,4 +1,5 @@
 use GFX.Canvas.Canvas as AuthoredCanvas
+use GFX.Assets.Image
 use GFX.Components
 use GFX.Plugins
 use GFX.Resources
@@ -17,6 +18,14 @@ test "consume Scene2D directly and through the GFX catalogs" {
     let viewport = Plugins.ViewportCamera2D(Plugins.ViewportCamera2D.Settings(
         zoom:2.0
     ))
+    var images = Image.Store()
+    let atlas = Scene2D.TileAtlas(images.add(Image()), 1, 1)
+    var tiles = Components.TileMap2D(atlas, 4, 3)
+    tiles.set(2, 1, 0)
+    tiles.layer = 2
+    tiles.sampling(Scene2D.Sampling.pixelated)
+    var overlay = Components.TileMap2D(atlas, 4, 3)
+    overlay.layer = 3
 
     assert(direct.width() == 16)
     assert(catalog.height() == 16)
@@ -26,4 +35,8 @@ test "consume Scene2D directly and through the GFX catalogs" {
     assert(scene.id() == "GFX.Scene2D.Plugin")
     assert(grid.id() == "GFX.Scene2D.Grid")
     assert(viewport.id() == "GFX.Scene2D.ViewportCamera")
+    assert(tiles.tile(2, 1)! == 0)
+    assert(tiles.layer == 2)
+    assert(tiles.sampling() == Scene2D.Sampling.pixelated)
+    assert(overlay.atlas().image() == tiles.atlas().image())
 }

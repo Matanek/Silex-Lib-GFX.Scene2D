@@ -1,8 +1,9 @@
 # Build a retained scene with GFX.Scene2D
 
 `GFX.Scene2D` owns the data that a user or alternative renderer must name to
-describe a 2D scene: `Transform`, `Camera`, `Canvas`, `Sprite`, `Grid`, and
-`Sampling`. The domain already carries the dimension, so declarations remain
+describe a 2D scene: `Transform`, `Camera`, `Canvas`, `Sprite`, `TileAtlas`,
+`TileMap`, `Grid`, and `Sampling`. The domain already carries the dimension,
+so declarations remain
 unsuffixed.
 
 [Lire cette documentation en français.](../FR/README.md)
@@ -50,6 +51,45 @@ The Scene2D world follows Scene3D's spatial convention: X points right and Y
 points up. `GFX.Canvas` content keeps its natural top-left, Y-down drawing
 coordinates; Scene2D orients it automatically. `Camera.project()` returns the
 same viewport coordinates suitable for pointer and window APIs.
+
+## Draw a retained tile field
+
+`Components.TileMap2D` represents a whole grid as one component. Its
+`TileAtlas` describes a regular image with no margin or spacing; indices
+advance left to right, then top to bottom. Grid rows advance upward in the
+Scene2D world, and cell `(0, 0)` starts at local `(0, 0)`.
+
+```sx
+use GFX.Assets.Image
+use GFX.Components
+use GFX.ECS
+use GFX.Scene2D
+
+let sheet = images.add(Image())
+let atlas = Scene2D.TileAtlas(sheet, 16, 16)
+var field = Components.TileMap2D(atlas, 256, 256)
+field.set(4, 7, 3)
+field.clear(4, 7)
+
+world.spawn(ECS.EntityRecipe()
+    ..with(Components.Transform2D())
+    ..with(field)
+)
+```
+
+An empty cell emits no instance. Every frame, the renderer converts the four
+viewport corners into map-local space, adds a one-cell guard, and visits only
+that rectangle. A huge map therefore creates neither one ECS entity per cell
+nor preparation work proportional to its full area. Visible cells share an
+instanced GPU buffer and one draw per map; unchanged content and camera do not
+upload that buffer again. `color`, `layer`, `depth`, `visible`, and
+`sampling(...)` configure placement as they do for a sprite. Sampling defaults
+to `Sampling.pixelated`.
+
+`coordinate_at(point)` converts a local point to `TileCoordinate?`, while
+`cell_origin(column, row)` returns a cell's local origin. Out-of-grid input
+returns `null` for hit testing and fails explicitly for `tile`, `set`, `clear`,
+or `cell_origin`.
 
 ## Place an interface in the viewport
 

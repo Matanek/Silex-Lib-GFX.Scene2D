@@ -1,7 +1,8 @@
 # GFX.Scene2D
 
 `GFX.Scene2D` provides retained 2D scenes with transforms, cameras, sprites,
-Canvas placement, viewport controls, grids, and GPU rendering.
+Canvas placement, retained tile maps, viewport controls, grids, and GPU
+rendering.
 
 ```text
 silex install GFX.Scene2D

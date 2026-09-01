@@ -12,6 +12,7 @@ use GFX.Scene2D.Canvas.TextMode
 use GFX.Scene2D.Grid
 use GFX.Scene2D.Packing
 use GFX.Scene2D.Sprite
+use GFX.Scene2D.TileMap
 use GFX.Scene2D.Transform
 use GFX.Scene2D.VectorText
 use GFX.Window
@@ -218,6 +219,24 @@ struct SpriteDraw {
     let viewport:bool
 }
 
+struct TileMapDraw {
+    let cache:int
+    let model:Math.Mat4
+    let size:Math.Vec2
+    let color:Color
+    let sampling:int
+    let first_instance:int
+    let instance_count:int
+    let layer:int
+    let depth:float
+    let order:int
+}
+
+struct TileInstance {
+    let translation:Math.Vec2
+    let region:Math.Vec4
+}
+
 class CoverageAtlasPage {
     var texture:GPU.Texture? = null
     var cursor_x:int = 1
@@ -320,6 +339,7 @@ struct SceneEntry {
 package class Renderer {
     private var drawing_pipeline:GPU.GraphicsPipeline? = null
     private var sprite_pipeline:GPU.GraphicsPipeline? = null
+    private var tile_map_pipeline:GPU.GraphicsPipeline? = null
     private var coverage_glyph_pipeline:GPU.GraphicsPipeline? = null
     private var grid_pipeline:GPU.GraphicsPipeline? = null
     private var sampler:GPU.Sampler? = null
@@ -357,6 +377,14 @@ package class Renderer {
     private var scene_layer_counts:int[]
     private var scene_layer_positions:int[]
     private var sprite_draws:SpriteDraw[]
+    private var tile_map_draws:TileMapDraw[]
+    private var tile_instances:TileInstance[]
+    private var tile_instance_buffer:GPU.Buffer? = null
+    private var tile_instance_upload:GPU.TransferBuffer? = null
+    private var tile_instance_capacity:int
+    private var tile_instance_packed:str
+    private var tile_instance_uploads:int
+    private var tile_instance_allocations:int
     private var coverage_atlas_pages:CoverageAtlasPage[]
     private var coverage_glyph_slots:CoverageGlyphSlot[]
     private var coverage_glyph_table:int[]
@@ -428,6 +456,12 @@ package class Renderer {
         self.scene_layer_counts = []
         self.scene_layer_positions = []
         self.sprite_draws = []
+        self.tile_map_draws = []
+        self.tile_instances = []
+        self.tile_instance_capacity = 0
+        self.tile_instance_packed = ""
+        self.tile_instance_uploads = 0
+        self.tile_instance_allocations = 0
         self.coverage_atlas_pages = []
         self.coverage_glyph_slots = []
         self.coverage_glyph_table = empty_coverage_glyph_table()
@@ -517,6 +551,29 @@ package class Renderer {
                 multisample:GPU.MultisampleState(samples:samples),
                 color_targets:target,
                 name:"GFX.Scene2D drawing text"
+            )
+        )
+        var tile_buffers:GPU.VertexBufferLayout[] = []
+        tile_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:16))
+        tile_buffers.append(GPU.VertexBufferLayout(
+            slot:1,
+            pitch:24,
+            rate:GPU.VertexRate.instance
+        ))
+        var tile_attributes:GPU.VertexAttribute[] = []
+        tile_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:0))
+        tile_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:8))
+        tile_attributes.append(GPU.VertexAttribute(location:2, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:0))
+        tile_attributes.append(GPU.VertexAttribute(location:3, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:8))
+        self.tile_map_pipeline = device.graphics_pipeline(
+            GPU.ShaderProgram.hlsl(file:"../Shaders/TileMap.hlsl"),
+            GPU.GraphicsPipelineSettings(
+                vertex_buffers:tile_buffers,
+                attributes:tile_attributes,
+                rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                multisample:GPU.MultisampleState(samples:samples),
+                color_targets:target,
+                name:"GFX.Scene2D retained tile map"
             )
         )
         var coverage_buffers:GPU.VertexBufferLayout[] = []
@@ -611,6 +668,8 @@ package class Renderer {
         self.selected_camera_order = 0
         self.scene_draws.clear()
         self.sprite_draws.clear()
+        self.tile_map_draws.clear()
+        self.tile_instances.clear()
         self.coverage_glyph_draws.clear()
         self.coverage_glyph_instances.clear()
         self.scene_entries.clear()
@@ -1455,17 +1514,100 @@ package class Renderer {
         ))
     }
 
+    func collect_tile_map(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        transform:@Transform,
+        tile_map:@TileMap,
+        images:@Image.Store
+    ) {
+        if !tile_map.visible { return }
+        let atlas = tile_map.atlas()
+        let handle = atlas.image()
+        if !images.contains(handle) { return }
+        let image = images.snapshot(handle)
+        if image.width() % atlas.tile_width() != 0 ||
+            image.height() % atlas.tile_height() != 0
+        {
+            panic("GFX.Scene2D.TileAtlas image dimensions must be exact multiples of its tile dimensions")
+        }
+        let atlas_columns = image.width() / atlas.tile_width()
+        let atlas_rows = image.height() / atlas.tile_height()
+        let cache_index = self.cache_index_for_image(
+            0,
+            handle.index(),
+            handle.generation()
+        )
+        var cache = self.image_cache[cache_index]
+        self.refresh_image(
+            device,
+            cache,
+            images.revision(handle),
+            image,
+            "GFX.Scene2D tile atlas"
+        )
+
+        let bounds = viewport_bounds_in_local_space(
+            self.scene_view_projection,
+            transform
+        )
+        let visible = tile_map.visible_range(bounds.minimum, bounds.maximum)
+        let first_instance = self.tile_instances.count()
+        var row = visible.first_row
+        while row < visible.last_row {
+            var column = visible.first_column
+            while column < visible.last_column {
+                if let tile = tile_map.tile(column, row) {
+                    if tile >= atlas_columns * atlas_rows {
+                        panic("GFX.Scene2D.TileMap tile index exceeds its atlas")
+                    }
+                    self.tile_instances.append(TileInstance(
+                        translation:Math.Vec2(
+                            (column as float + 0.5) * atlas.tile_width() as float,
+                            (row as float + 0.5) * atlas.tile_height() as float
+                        ),
+                        region:Math.Vec4(
+                            (tile % atlas_columns) as float / atlas_columns as float,
+                            (tile / atlas_columns) as float / atlas_rows as float,
+                            1.0 / atlas_columns as float,
+                            1.0 / atlas_rows as float
+                        )
+                    ))
+                }
+                column++
+            }
+            row++
+        }
+        let instance_count = self.tile_instances.count() - first_instance
+        if instance_count == 0 { return }
+        self.tile_map_draws.append(TileMapDraw(
+            cache:cache_index,
+            model:transform.matrix(),
+            size:atlas.tile_size(),
+            color:tile_map.color,
+            sampling:tile_map.sampling_mode(),
+            first_instance:first_instance,
+            instance_count:instance_count,
+            layer:tile_map.layer,
+            depth:tile_map.depth,
+            order:entity.index * 2
+        ))
+    }
+
     func finish_prepare(device:@GPU.Device) {
         self.submit_image_uploads(device)
         self.submit_coverage_uploads(device)
         self.prepare_coverage_instances(device)
+        self.prepare_tile_instances(device)
         let reordered = sort_scene_draws(
             self.scene_draws,
             self.scene_draw_scratch,
             self.scene_layer_counts,
             self.scene_layer_positions
         )
-        if self.sprite_draws.is_empty() && self.coverage_glyph_draws.is_empty() {
+        if self.sprite_draws.is_empty() && self.tile_map_draws.is_empty() &&
+            self.coverage_glyph_draws.is_empty()
+        {
             self.scene_entries.clear()
         } else {
             self.rebuild_scene_entries()
@@ -1498,7 +1640,9 @@ package class Renderer {
 
     private func draw_scene(pass:@GPU.RenderPass) {
         if !self.camera_ready { return }
-        if self.sprite_draws.is_empty() && self.coverage_glyph_draws.is_empty() {
+        if self.sprite_draws.is_empty() && self.tile_map_draws.is_empty() &&
+            self.coverage_glyph_draws.is_empty()
+        {
             self.draw_scene_drawings(pass)
             return
         }
@@ -1545,8 +1689,11 @@ package class Renderer {
             } elif entry.kind == 1 {
                 self.draw_scene_sprite(pass, self.sprite_draws[entry.index])
                 cursor++
-            } else {
+            } elif entry.kind == 2 {
                 self.draw_coverage_glyphs(pass, self.coverage_glyph_draws[entry.index])
+                cursor++
+            } else {
+                self.draw_tile_map(pass, self.tile_map_draws[entry.index])
                 cursor++
             }
         }
@@ -1618,6 +1765,44 @@ package class Renderer {
                             pass.vertex_buffer(0, vertices)
                             pass.index_buffer(indices)
                             pass.draw_indexed(6)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func draw_tile_map(pass:@GPU.RenderPass, draw:TileMapDraw) {
+        var cache = self.image_cache[draw.cache]
+        if let texture = cache.texture {
+            if let pipeline = self.tile_map_pipeline {
+                var selected_sampler = self.sampler
+                if draw.sampling == 1 { selected_sampler = self.pixelated_sampler }
+                if let sampler = selected_sampler {
+                    if let vertices = self.quad_vertices {
+                        if let instances = self.tile_instance_buffer {
+                            if let indices = self.quad_indices {
+                                var uniform = Packing.tile_map_uniform(
+                                    draw.model,
+                                    self.scene_view_projection,
+                                    draw.size,
+                                    draw.color,
+                                    draw.depth
+                                )
+                                pass.bind(pipeline)
+                                pass.vertex_uniform(0, uniform, 160)
+                                pass.fragment_sampler(0, texture, sampler)
+                                pass.vertex_buffer(0, vertices)
+                                pass.vertex_buffer(1, instances)
+                                pass.index_buffer(indices)
+                                pass.draw_indexed(
+                                    6,
+                                    draw.instance_count,
+                                    0,
+                                    0,
+                                    draw.first_instance
+                                )
+                            }
                         }
                     }
                 }
@@ -1980,6 +2165,14 @@ package class Renderer {
     package func coverage_instance_allocation_count() int {
         return self.coverage_instance_allocations
     }
+    package func tile_instance_count() int { return self.tile_instances.count() }
+    package func tile_draw_count() int { return self.tile_map_draws.count() }
+    package func tile_instance_upload_count() int {
+        return self.tile_instance_uploads
+    }
+    package func tile_instance_allocation_count() int {
+        return self.tile_instance_allocations
+    }
     package func coverage_block_build_count() int { return self.coverage_block_builds }
     package func coverage_block_cache_count() int { return self.coverage_block_cache.count() }
     package func coverage_block_cache_index_count() int {
@@ -2211,6 +2404,38 @@ package class Renderer {
         }
     }
 
+    private func prepare_tile_instances(device:@GPU.Device) {
+        if self.tile_instances.is_empty() { return }
+        let byte_count = self.tile_instances.count() * 24
+        var packed = pack_tile_instances(self.tile_instances)
+        if self.tile_instance_buffer != null && packed == self.tile_instance_packed {
+            return
+        }
+        if self.tile_instance_buffer == null || self.tile_instance_capacity < byte_count {
+            var capacity = 4096
+            while capacity < byte_count { capacity *= 2 }
+            self.tile_instance_upload = device.upload_buffer(
+                capacity,
+                "GFX.Scene2D tile instances upload"
+            )
+            self.tile_instance_buffer = device.buffer(GPU.BufferSettings(
+                size:capacity,
+                usage:GPU.BufferUsage.vertex(),
+                name:"GFX.Scene2D tile instances"
+            ))
+            self.tile_instance_capacity = capacity
+            self.tile_instance_allocations++
+        }
+        self.tile_instance_packed = move packed
+        if let upload = self.tile_instance_upload {
+            if let destination = self.tile_instance_buffer {
+                upload.write_packed(self.tile_instance_packed, byte_count, cycle:true)
+                copy_buffer(device, upload, destination, byte_count)
+                self.tile_instance_uploads++
+            }
+        }
+    }
+
     private func ensure_scene_instance_storage(byte_count:int) {
         if self.drawing_instance_storage_capacity >= byte_count { return }
         var grown = Packing.storage(byte_count)
@@ -2311,6 +2536,16 @@ package class Renderer {
             index++
         }
         index = 0
+        while index < self.tile_map_draws.count() {
+            if !viewport {
+                self.scene_entries.append(tile_map_entry(
+                    index,
+                    self.tile_map_draws[index]
+                ))
+            }
+            index++
+        }
+        index = 0
         while index < self.coverage_glyph_draws.count() {
             if self.coverage_glyph_draws[index].viewport == viewport {
                 self.scene_entries.append(coverage_entry(
@@ -2345,6 +2580,23 @@ local func pack_coverage_instances(values:@CoverageGlyphInstance[]) str {
             value.depth,
             value.region,
             value.color
+        )
+        index++
+    }
+    return bytes
+}
+
+local func pack_tile_instances(values:@TileInstance[]) str {
+    var bytes = Packing.storage(values.count() * 24)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    var index = 0
+    while index < values.count() {
+        let value = values[index]
+        Packing.write_tile_instance(
+            address,
+            index * 24,
+            value.translation,
+            value.region
         )
         index++
     }
@@ -2533,6 +2785,45 @@ local func world_image_model(transform:@Transform) Math.Mat4 {
     )
 }
 
+struct LocalBounds {
+    let minimum:Math.Vec2
+    let maximum:Math.Vec2
+}
+
+local func viewport_bounds_in_local_space(
+    view_projection:Math.Mat4,
+    transform:@Transform
+) LocalBounds {
+    let inverse_view_projection = view_projection.inverted()
+    let inverse_model = transform.view_matrix()
+    let first = local_from_clip(inverse_view_projection, inverse_model, -1.0, -1.0)
+    var minimum = first
+    var maximum = first
+    let second = local_from_clip(inverse_view_projection, inverse_model, 1.0, -1.0)
+    minimum = Math.Vec2(Math.min(minimum.x, second.x), Math.min(minimum.y, second.y))
+    maximum = Math.Vec2(Math.max(maximum.x, second.x), Math.max(maximum.y, second.y))
+    let third = local_from_clip(inverse_view_projection, inverse_model, 1.0, 1.0)
+    minimum = Math.Vec2(Math.min(minimum.x, third.x), Math.min(minimum.y, third.y))
+    maximum = Math.Vec2(Math.max(maximum.x, third.x), Math.max(maximum.y, third.y))
+    let fourth = local_from_clip(inverse_view_projection, inverse_model, -1.0, 1.0)
+    minimum = Math.Vec2(Math.min(minimum.x, fourth.x), Math.min(minimum.y, fourth.y))
+    maximum = Math.Vec2(Math.max(maximum.x, fourth.x), Math.max(maximum.y, fourth.y))
+    return LocalBounds(minimum:minimum, maximum:maximum)
+}
+
+local func local_from_clip(
+    inverse_view_projection:Math.Mat4,
+    inverse_model:Math.Mat4,
+    x:float,
+    y:float
+) Math.Vec2 {
+    let homogeneous = inverse_view_projection.multiply(Math.Vec4(x, y, 0.0, 1.0))
+    var world = homogeneous
+    if homogeneous.w != 0.0 { world = homogeneous.divide(homogeneous.w) }
+    let point = inverse_model.multiply(world)
+    return Math.Vec2(point.x, point.y)
+}
+
 local func sprite_draw_before(left:@SpriteDraw, right:@SpriteDraw) bool {
     if left.layer != right.layer { return left.layer < right.layer }
     if left.depth != right.depth { return left.depth < right.depth }
@@ -2709,6 +3000,16 @@ local func scene_entry(kind:int, index:int, draw:SpriteDraw) SceneEntry {
 local func coverage_entry(index:int, draw:CoverageGlyphDraw) SceneEntry {
     return SceneEntry(
         kind:2,
+        index:index,
+        layer:draw.layer,
+        depth:draw.depth,
+        order:draw.order
+    )
+}
+
+local func tile_map_entry(index:int, draw:TileMapDraw) SceneEntry {
+    return SceneEntry(
+        kind:3,
         index:index,
         layer:draw.layer,
         depth:draw.depth,

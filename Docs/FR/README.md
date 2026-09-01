@@ -2,7 +2,8 @@
 
 `GFX.Scene2D` possède les données qu’un utilisateur ou renderer alternatif doit
 nommer pour décrire une scène 2D : `Transform`, `Camera`, `Canvas`, `Sprite`,
-`Grid` et `Sampling`. Le domaine portant déjà la dimension, ses déclarations
+`TileAtlas`, `TileMap`, `Grid` et `Sampling`. Le domaine portant déjà la
+dimension, ses déclarations
 restent sans suffixe.
 
 [Read this documentation in English.](../EN/README.md)
@@ -53,6 +54,47 @@ droite et Y vers le haut. Le contenu `GFX.Canvas` conserve ses coordonnées de
 dessin naturelles, origine en haut à gauche et Y vers le bas ; Scene2D l’oriente
 automatiquement. `Camera.project()` retourne les mêmes coordonnées viewport
 adaptées au pointeur et aux API de fenêtre.
+
+## Dessiner un champ de tuiles retenu
+
+`Components.TileMap2D` représente toute une grille par un seul composant. Son
+`TileAtlas` décrit une image régulière, sans marge ni espacement ; les indices
+avancent de gauche à droite puis du haut vers le bas. Les lignes de la grille,
+elles, avancent vers le haut dans le monde Scene2D : l’origine locale de la
+cellule `(0, 0)` est `(0, 0)`.
+
+```sx
+use GFX.Assets.Image
+use GFX.Components
+use GFX.ECS
+use GFX.Scene2D
+
+let sheet = images.add(Image())
+let atlas = Scene2D.TileAtlas(sheet, 16, 16)
+var field = Components.TileMap2D(atlas, 256, 256)
+field.set(4, 7, 3)
+field.clear(4, 7)
+
+world.spawn(ECS.EntityRecipe()
+    ..with(Components.Transform2D())
+    ..with(field)
+)
+```
+
+Une cellule vide ne produit aucune instance. À chaque frame, le renderer
+convertit les quatre coins du viewport dans l’espace local de la carte, ajoute
+une cellule de garde, puis ne parcourt que ce rectangle. Une carte immense ne
+crée donc ni entité ECS par cellule, ni travail de préparation proportionnel à
+sa surface totale. Les cellules visibles partagent un buffer GPU instancié et
+un draw par carte ; un contenu et une caméra inchangés ne retransfèrent pas ce
+buffer. `color`, `layer`, `depth`, `visible` et `sampling(...)` règlent le
+placement comme pour un sprite. Le mode d’échantillonnage initial est
+`Sampling.pixelated`.
+
+`coordinate_at(point)` convertit un point local en `TileCoordinate?`, tandis
+que `cell_origin(column, row)` retourne l’origine locale d’une cellule. Une
+coordonnée hors grille renvoie `null` pour le hit-test et provoque une erreur
+explicite pour `tile`, `set`, `clear` ou `cell_origin`.
 
 ## Placer une interface dans le viewport
 

@@ -1,0 +1,29 @@
+use GFX.Assets.Image
+use STD.Math
+
+// Describes a regular, tightly packed sprite sheet. Tile indices advance from
+// left to right, then from the top row to the bottom row of the image.
+public struct TileAtlas {
+    private let image_handle:Image.Handle
+    private let cell_width:int
+    private let cell_height:int
+
+    init(image:Image.Handle, tile_width:int, tile_height:int) {
+        if !image.is_valid() {
+            panic("GFX.Scene2D.TileAtlas requires a valid image handle")
+        }
+        if tile_width <= 0 || tile_height <= 0 {
+            panic("GFX.Scene2D.TileAtlas tile dimensions must be positive")
+        }
+        self.image_handle = image
+        self.cell_width = tile_width
+        self.cell_height = tile_height
+    }
+
+    func image() Image.Handle { return self.image_handle }
+    func tile_width() int { return self.cell_width }
+    func tile_height() int { return self.cell_height }
+    func tile_size() Math.Vec2 {
+        return Math.Vec2(self.cell_width as float, self.cell_height as float)
+    }
+}
