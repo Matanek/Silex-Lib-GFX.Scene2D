@@ -8,22 +8,31 @@ use GFX.Input.State as InputState
 use GFX.Scene2D.Camera
 use GFX.Scene2D.Plugin as Scene2DPlugin
 use GFX.Scene2D.Transform
+use GFX.Window
 use STD.Math
 use STD.Time.Clock
+
+public enum Scroll {
+    zoom
+    pan
+}
 
 public struct Controls {
     var pan:Input.MouseButton
     var zoom_in:Input.Key
     var zoom_out:Input.Key
+    var scroll:Scroll
 
     init(
         pan:Input.MouseButton = Input.MouseButton.middle,
         zoom_in:Input.Key = Input.Key.page_up,
-        zoom_out:Input.Key = Input.Key.page_down
+        zoom_out:Input.Key = Input.Key.page_down,
+        scroll:Scroll = Scroll.zoom
     ) {
         self.pan = pan
         self.zoom_in = zoom_in
         self.zoom_out = zoom_out
+        self.scroll = scroll
     }
 }
 
@@ -35,6 +44,8 @@ public class Controller {
     private var desired_position:Math.Vec2
     private var current_zoom:float
     private var desired_zoom:float
+    private var limits:Math.Rect? = null
+    private var viewport:Math.Vec2
     private var clock:Clock
 
     init(settings:ViewportCamera.Settings = ViewportCamera.Settings()) {
@@ -48,26 +59,40 @@ public class Controller {
         self.desired_position = settings.position
         self.current_zoom = settings.zoom
         self.desired_zoom = settings.zoom
+        self.viewport = valid_viewport(settings.viewport_size)
         self.clock = Clock()
     }
 
     func entity() ECS.Entity { return self.camera_entity }
     func position() Math.Vec2 { return self.desired_position }
     func zoom() float { return self.desired_zoom }
+    func world_limits() Math.Rect? { return self.limits }
     module func controls() Controls { return self.configured_controls }
 
     func set_position(position:Math.Vec2) {
-        self.current_position = position
-        self.desired_position = position
+        let clamped = self.clamped_position(position, self.desired_zoom)
+        self.current_position = clamped
+        self.desired_position = clamped
     }
 
     func set_zoom(zoom:float) {
         let clamped = Math.clamp(zoom, self.settings.min_zoom, self.settings.max_zoom)
         self.current_zoom = clamped
         self.desired_zoom = clamped
+        self.clamp_positions()
     }
 
     func pan(delta:Math.Vec2) { self.apply_pan(delta.x, delta.y) }
+
+    func set_limits(value:Math.Rect) {
+        if value.is_empty() {
+            panic("GFX.Scene2D.ViewportCamera limits must have positive dimensions")
+        }
+        self.limits = value
+        self.clamp_positions()
+    }
+
+    func clear_limits() { self.limits = null }
 
     module func attach(entity:ECS.Entity) { self.camera_entity = entity }
 
@@ -88,12 +113,30 @@ public class Controller {
         self.desired_position = self.desired_position.subtract(
             Math.Vec2(mouse_x * scale, -mouse_y * scale)
         )
+        self.desired_position = self.clamped_position(
+            self.desired_position,
+            self.desired_zoom
+        )
     }
 
     module func zoom_wheel(delta:float) {
         if !self.settings.active { return }
         self.desired_zoom *= 1.0 + delta * self.settings.scroll_zoom_speed
         self.clamp_zoom()
+        self.clamp_positions()
+    }
+
+    module func scroll(delta:Math.Vec2) {
+        if self.configured_controls.scroll == Scroll.pan {
+            self.apply_pan(delta.x, delta.y)
+        } else {
+            self.zoom_wheel(delta.y)
+        }
+    }
+
+    module func resize(viewport:Math.Vec2) {
+        self.viewport = valid_viewport(viewport)
+        self.clamp_positions()
     }
 
     module func advance(zooming_in:bool, zooming_out:bool) {
@@ -113,6 +156,7 @@ public class Controller {
             self.desired_zoom,
             smoothing_factor(self.settings.zoom_response, dt)
         )
+        self.clamp_positions()
     }
 
     func transform() Transform { return Transform(self.current_position) }
@@ -123,6 +167,39 @@ public class Controller {
             self.settings.min_zoom,
             self.settings.max_zoom
         )
+    }
+
+    private func clamp_positions() {
+        self.desired_position = self.clamped_position(
+            self.desired_position,
+            self.desired_zoom
+        )
+        self.current_position = self.clamped_position(
+            self.current_position,
+            self.current_zoom
+        )
+    }
+
+    private func clamped_position(position:Math.Vec2, zoom:float) Math.Vec2 {
+        if let bounds = self.limits {
+            return Math.Vec2(
+                clamped_axis(
+                    position.x,
+                    bounds.x,
+                    bounds.w,
+                    self.viewport.x / zoom,
+                    self.settings.overscroll.x
+                ),
+                clamped_axis(
+                    position.y,
+                    bounds.y,
+                    bounds.h,
+                    self.viewport.y / zoom,
+                    self.settings.overscroll.y
+                )
+            )
+        }
+        return position
     }
 }
 
@@ -142,6 +219,7 @@ public struct ViewportCamera:PluginProtocol {
         var order:int = 0
         var active:bool = true
         var controls:Controls? = null
+        var overscroll:Math.Vec2 = Math.Vec2()
     }
 
     private let settings:Settings
@@ -167,11 +245,17 @@ func create_camera(controller:&Controller, world:&ECS.World) {
     controller.attach(entity)
 }
 
-func update_camera(controller:&Controller, world:&ECS.World, input:@InputState) {
+func update_camera(
+    controller:&Controller,
+    world:&ECS.World,
+    input:@InputState,
+    window:@Window
+) {
     let controls = controller.controls()
     let mouse = input.mouse_delta()
     let wheel = input.mouse_wheel()
-    controller.zoom_wheel(wheel.y)
+    controller.resize(window.size())
+    controller.scroll(wheel)
     if input.is_down(controls.pan) { controller.apply_pan(mouse.x, mouse.y) }
     controller.advance(
         input.is_down(controls.zoom_in),
@@ -209,4 +293,32 @@ func validate(settings:ViewportCamera.Settings) {
     if settings.max_delta_time <= 0.0 {
         panic("GFX.Scene2D.ViewportCamera requires a positive maximum delta time")
     }
+    if settings.overscroll.x < 0.0 || settings.overscroll.y < 0.0 {
+        panic("GFX.Scene2D.ViewportCamera overscroll must not be negative")
+    }
+}
+
+func valid_viewport(value:Math.Vec2) Math.Vec2 {
+    var width = value.x
+    var height = value.y
+    if width <= 0.0 { width = 1.0 }
+    if height <= 0.0 { height = 1.0 }
+    return Math.Vec2(width, height)
+}
+
+func clamped_axis(
+    value:float,
+    minimum:float,
+    content_extent:float,
+    visible_extent:float,
+    overscroll:float
+) float {
+    let center = minimum + content_extent * 0.5
+    if visible_extent >= content_extent { return center }
+    let half_visible = visible_extent * 0.5
+    return Math.clamp(
+        value,
+        minimum + half_visible - overscroll,
+        minimum + content_extent - half_visible + overscroll
+    )
 }

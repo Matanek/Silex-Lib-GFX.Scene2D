@@ -66,4 +66,25 @@ public struct Camera {
             (1.0 - clip.y / clip.w) * 0.5 * viewport.y
         )
     }
+
+    func unproject(point:Math.Vec2, transform:@Transform, fallback:Math.Vec2) Math.Vec2? {
+        if Math.abs(transform.scale.x) <= Math.epsilon() ||
+            Math.abs(transform.scale.y) <= Math.epsilon()
+        { return null }
+        let viewport = self.viewport(fallback)
+        let clip = Math.Vec4(
+            point.x / viewport.x * 2.0 - 1.0,
+            1.0 - point.y / viewport.y * 2.0,
+            0.0,
+            1.0
+        )
+        let world = self.projection(viewport)
+            .multiply(self.view(transform))
+            .inverted()
+            .multiply(clip)
+        if world.w == 0.0 || !Math.is_finite(world.x) ||
+            !Math.is_finite(world.y) || !Math.is_finite(world.w)
+        { return null }
+        return Math.Vec2(world.x / world.w, world.y / world.w)
+    }
 }

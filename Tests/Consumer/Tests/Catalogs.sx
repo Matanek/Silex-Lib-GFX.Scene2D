@@ -3,6 +3,7 @@ use GFX.Components
 use GFX.Plugins
 use GFX.Resources
 use GFX.Scene2D
+use STD.Math
 
 func injected(camera:&Resources.ViewportCamera2D) {}
 
@@ -17,6 +18,17 @@ test "consume Scene2D directly and through the GFX catalogs" {
     let viewport = Plugins.ViewportCamera2D(Plugins.ViewportCamera2D.Settings(
         zoom:2.0
     ))
+    var controller = Resources.ViewportCamera2D(
+        Plugins.ViewportCamera2D.Settings(viewport_size:Math.Vec2(320.0, 180.0))
+    )
+    controller.set_limits(Math.Rect(0.0, 0.0, 640.0, 480.0))
+    controller.set_position(Math.Vec2(320.0, 240.0))
+    let pointer = Math.Vec2(160.0, 90.0)
+    let world_point = controller.camera().unproject(
+        pointer,
+        controller.transform(),
+        Math.Vec2(320.0, 180.0)
+    )!
 
     assert(direct.width() == 16)
     assert(catalog.height() == 16)
@@ -26,4 +38,6 @@ test "consume Scene2D directly and through the GFX catalogs" {
     assert(scene.id() == "GFX.Scene2D.Plugin")
     assert(grid.id() == "GFX.Scene2D.Grid")
     assert(viewport.id() == "GFX.Scene2D.ViewportCamera")
+    assert(world_point.nearly_equal(Math.Vec2(320.0, 240.0)))
+    controller.clear_limits()
 }

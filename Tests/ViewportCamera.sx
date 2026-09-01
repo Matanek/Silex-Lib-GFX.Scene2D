@@ -1,5 +1,7 @@
 use GFX.Scene2D.ViewportCamera.Controller
 use GFX.Scene2D.ViewportCamera.ViewportCamera as ViewportCameraPlugin
+use GFX.Scene2D.ViewportCamera.Controls
+use GFX.Scene2D.ViewportCamera.Scroll
 use STD.Math
 
 test "derive a reusable 2D viewport camera from position and zoom" {
@@ -17,4 +19,42 @@ test "pan a 2D viewport camera at its current zoom" {
     var camera = Controller(ViewportCameraPlugin.Settings(zoom:2.0, pan_sensitivity:1.0))
     camera.pan(Math.Vec2(8.0, -6.0))
     assert(camera.position() == Math.Vec2(-4.0, -3.0))
+}
+
+test "center small axes and clamp large axes with overscroll" {
+    var camera = Controller(ViewportCameraPlugin.Settings(
+        viewport_size:Math.Vec2(100.0, 80.0),
+        overscroll:Math.Vec2(10.0)
+    ))
+    camera.set_limits(Math.Rect(0.0, 0.0, 300.0, 50.0))
+    camera.set_position(Math.Vec2(-100.0, 100.0))
+    assert(camera.position() == Math.Vec2(40.0, 25.0))
+
+    camera.set_position(Math.Vec2(1_000.0, -100.0))
+    assert(camera.position() == Math.Vec2(260.0, 25.0))
+    camera.set_zoom(2.0)
+    camera.set_position(Math.Vec2(1_000.0, 1_000.0))
+    assert(camera.position() == Math.Vec2(285.0, 40.0))
+
+    camera.resize(Math.Vec2(800.0, 40.0))
+    assert(camera.position().x == 150.0)
+    assert(camera.position().y == 40.0)
+    camera.clear_limits()
+    camera.set_position(Math.Vec2(900.0))
+    assert(camera.position() == Math.Vec2(900.0))
+}
+
+test "choose pan scroll explicitly while preserving zoom by default" {
+    var panning = Controller(ViewportCameraPlugin.Settings(
+        zoom:2.0,
+        controls:Controls(scroll:Scroll.pan)
+    ))
+    panning.scroll(Math.Vec2(8.0, -6.0))
+    assert(panning.position() == Math.Vec2(-4.0, -3.0))
+    assert(panning.zoom() == 2.0)
+
+    var zooming = Controller(ViewportCameraPlugin.Settings())
+    zooming.scroll(Math.Vec2(8.0, 1.0))
+    assert(zooming.position() == Math.Vec2())
+    assert(Math.nearly_equal(zooming.zoom(), 1.15))
 }
