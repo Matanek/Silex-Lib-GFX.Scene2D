@@ -1,5 +1,9 @@
 use GFX.Color
+use GFX.Assets.Image
 use GFX.Canvas.Geometry
+use GFX.Canvas.ImageContent
+use GFX.Canvas.ImageFit
+use GFX.Canvas.ImageMappingKind
 use GFX.Scene2D.Grid
 use Interop.C
 use STD.Math
@@ -70,6 +74,64 @@ func shadow_vertices(mesh:@Geometry.Mesh) str {
         write_vec2(address, offset + 52, normal)
         index++
     }
+    return bytes
+}
+
+func image_drawing_uniform(content:@ImageContent) str {
+    var paint = content.paint()
+    let image = paint.image()
+    let mapping = content.mapping()
+    var region = Image.Region(0, 0, image.width(), image.height())
+    if let selected = mapping.region() { region = selected }
+    var destination_origin = mapping.frame().position
+    var destination_size = mapping.frame().size
+    if mapping.kind() == ImageMappingKind.fit && mapping.mode() != ImageFit.stretch {
+        let source_size = Math.Vec2(region.width as float, region.height as float)
+        let scale_x = mapping.frame().size.x / source_size.x
+        let scale_y = mapping.frame().size.y / source_size.y
+        var scale = Math.min(scale_x, scale_y)
+        if mapping.mode() == ImageFit.cover { scale = Math.max(scale_x, scale_y) }
+        destination_size = source_size.multiply(scale)
+        destination_origin = mapping.frame().position.add(
+            mapping.frame().size.subtract(destination_size).multiply(mapping.alignment())
+        )
+    }
+    var bytes = storage(80)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_vec4(address, 0, Math.Vec4(
+        mapping.frame().position.x,
+        mapping.frame().position.y,
+        mapping.frame().size.x,
+        mapping.frame().size.y
+    ))
+    write_vec4(address, 16, Math.Vec4(
+        destination_origin.x,
+        destination_origin.y,
+        destination_size.x,
+        destination_size.y
+    ))
+    write_vec4(address, 32, Math.Vec4(
+        region.x as float,
+        region.y as float,
+        region.width as float,
+        region.height as float
+    ))
+    write_vec4(address, 48, Math.Vec4(
+        mapping.origin().x,
+        mapping.origin().y,
+        mapping.texel_size().x,
+        mapping.texel_size().y
+    ))
+    var kind = 0.0
+    if mapping.kind() == ImageMappingKind.tile { kind = 1.0 }
+    var sampling = 0.0
+    if mapping.sampling() == GFX.Canvas.ImageSampling.pixelated { sampling = 1.0 }
+    write_vec4(address, 64, Math.Vec4(
+        image.width() as float,
+        image.height() as float,
+        kind,
+        sampling
+    ))
     return bytes
 }
 

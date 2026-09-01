@@ -159,6 +159,14 @@ frame animée réécrit ainsi les valeurs du mesh sans reconstruire ses capacit�
 Modifier uniquement un libellé ne transfère ni la géométrie, ni les autres
 couches de texte.
 
+Un `Canvas.ImagePaint` suit le même principe. Scene2D conserve séparément le
+mesh du masque et la texture indexée par l'identité de l'ImagePaint. Une frame
+inchangée ne transfère rien ; `ImagePaint.replace(...)` réenvoie uniquement la
+texture concernée et conserve le buffer du rectangle, cercle ou chemin. Le
+shader applique `fit` ou `tile` dans les coordonnées locales du Canvas, puis
+évalue le masque analytique. Rotation et échelle non uniforme restent ainsi
+des propriétés de l'instance, pas une raison de reconstruire la géométrie.
+
 Les identités de textures de sprites et de textes sont indexées directement ;
 la préparation d’une frame reste linéaire selon les dessins visibles. Le cache
 vectoriel garde au plus 2 048 meshes de glyphes et 256 couches préparées. Après
@@ -202,10 +210,10 @@ application
 Un Bundle autonome peut aussi installer `Plugins.Scene2D()` directement ; il
 possède alors sa fenêtre et sa pile de rendu si elles ne viennent pas du parent.
 
-Les shaders `Drawing.hlsl`, `AnalyticShadow.hlsl`, `Grid.hlsl` et
-`Sprite.hlsl` appartiennent à ce package. Ils ne constituent pas une API
-obligatoire ; une extension peut lire les données publiques de scène et fournir
-son propre `GPU.ShaderProgram.hlsl`.
+Les shaders `Drawing.hlsl`, `AnalyticShadow.hlsl`, `ImageDrawing.hlsl`,
+`Grid.hlsl` et `Sprite.hlsl` appartiennent à ce package. Ils ne constituent pas
+une API obligatoire ; une extension peut lire les données publiques de scène et
+fournir son propre `GPU.ShaderProgram.hlsl`.
 
 La démonstration visuelle [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 appartient à Silex-Examples.

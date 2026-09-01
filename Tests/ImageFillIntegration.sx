@@ -1,0 +1,79 @@
+use GFX.Application
+use GFX.Assets.Image
+use GFX.Canvas
+use GFX.Color
+use GFX.Components
+use GFX.ECS
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Scene2D.Renderer
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+class ImagePaintCase {
+    var paint:Canvas.ImagePaint = Canvas.ImagePaint(Image.solid(Color.red_500()))
+    var drawing:Canvas = Canvas()
+    var updates:int = 0
+}
+
+func create_image_fill(world:&ECS.World, state:&ImagePaintCase) {
+    var drawing = Canvas()
+    {
+        var source = state.paint
+        drawing.paint(func(painter:&Canvas.Painter) {
+            painter.fill(
+                Canvas.Rect(Math.Vec2(4.0), Math.Vec2(24.0), 4.0),
+                Canvas.Fill.image(
+                    source,
+                    Canvas.ImageMapping.fit(
+                        frame:Canvas.Rect(Math.Vec2(4.0), Math.Vec2(24.0)),
+                        mode:Canvas.ImageFit.cover,
+                        sampling:Canvas.ImageSampling.smooth
+                    )
+                )
+            )
+        })
+    }
+    state.drawing = drawing
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 32, 32))
+    )
+}
+
+func update_image_fill(state:&ImagePaintCase) {
+    state.updates++
+    if state.updates == 2 {
+        state.paint.replace(Image.solid(Color.blue_500()))
+    }
+}
+
+func require_image_fill_cache(
+    renderer:@Renderer,
+    state:@ImagePaintCase,
+    controller:&Application.Controller
+) {
+    if state.updates < 3 { return }
+    assert(renderer.image_cache_count() == 1)
+    assert(renderer.image_upload_count() == 2)
+    assert(renderer.geometry_refresh_count() == 1)
+    assert(renderer.drawing_cache_count() == 1)
+    controller.stop()
+}
+
+test "reuse an analytic Canvas mask while ImagePaint content changes" {
+    var application = Application()
+    application.add_resource(ImagePaintCase())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D retained Canvas image fill"
+        ..width = 64
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_image_fill)
+    application.add_system(Application.Schedule.update, update_image_fill)
+    application.add_after_system(Application.Schedule.render, require_image_fill_cache)
+    assert(application.run() == 0)
+}
