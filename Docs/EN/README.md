@@ -110,6 +110,24 @@ ordinary drawing, and strong magnification; remaining in one class does not
 retessellate. Color, translation, rotation, and scale update only the GPU
 instance.
 
+## Render an analytic shadow
+
+The built-in renderer has a direct GPU path for a Canvas layer containing
+exactly one `Effect.shadow(...)` and exactly one analytic primitive: rectangle,
+rounded rectangle, circle, or line. Its brush alpha must be spatially uniform.
+The shader evaluates both the shape and its Gaussian blur inside an expanded
+quad; it creates no CPU image, effect texture, or offscreen pass. Translation,
+rotation, and scale, including non-uniform scale, remain instance data. Changing
+placement or shadow parameters therefore does not rebuild shared geometry.
+
+This narrow contract is intentional. A layer with several primitives, a path,
+an image, a spatially varying brush alpha, or text is not eligible. This applies
+to both vector and coverage `GFX.Font` text modes: text remains vector or
+rasterizable according to the component choice, but its shadow requires the
+general effect compositor. Until that compositor is installed, Scene2D fails
+explicitly with `Canvas filtered layer is not eligible for the analytic shadow
+path` instead of dropping the effect.
+
 ## Understand retention and caches
 
 The component retains the identity of the `GFX.Canvas.Canvas` it receives. If
@@ -175,9 +193,9 @@ application
 A self-contained Bundle may instead install `Plugins.Scene2D()` directly; it
 then owns its window and rendering stack when the parent does not provide them.
 
-The `Drawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this
-package. They are not a mandatory API; an extension can read public scene data
-and provide its own `GPU.ShaderProgram.hlsl`.
+The `Drawing.hlsl`, `AnalyticShadow.hlsl`, `Grid.hlsl`, and `Sprite.hlsl`
+shaders belong to this package. They are not a mandatory API; an extension can
+read public scene data and provide its own `GPU.ShaderProgram.hlsl`.
 
 The visual [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 demonstration belongs to Silex-Examples.

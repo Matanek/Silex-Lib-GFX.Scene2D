@@ -22,7 +22,7 @@ func drawing_vertices(mesh:@Geometry.Mesh) str {
 }
 
 func drawing_instance(model:Math.Mat4, color:Color) str {
-    var bytes = storage(48)
+    var bytes = storage(80)
     let address = C.address_bits(C.mutable_string_pointer(bytes))
     write_affine_instance(
         address,
@@ -33,6 +33,43 @@ func drawing_instance(model:Math.Mat4, color:Color) str {
         model.w.z,
         color
     )
+    return bytes
+}
+
+func shadow_vertices(mesh:@Geometry.Mesh) str {
+    let source = mesh.vertices()
+    if source.count() != 6 {
+        panic("GFX.Scene2D analytic shadow requires one six-vertex quad")
+    }
+    let horizontal = Math.Vec2(
+        source[1].position.x - source[0].position.x,
+        source[1].position.y - source[0].position.y
+    )
+    let vertical = Math.Vec2(
+        source[5].position.x - source[0].position.x,
+        source[5].position.y - source[0].position.y
+    )
+    let axis = horizontal.divide(Math.sqrt(horizontal.length_squared()))
+    let normal = vertical.divide(Math.sqrt(vertical.length_squared()))
+    let first = source[0]
+    let center = Math.Vec2(first.position.x, first.position.y)
+        .subtract(axis.multiply(first.uv.x))
+        .subtract(normal.multiply(first.uv.y))
+    var bytes = storage(source.count() * 60)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    var index = 0
+    while index < source.count() {
+        let vertex = source[index]
+        let offset = index * 60
+        write_vec3(address, offset, vertex.position)
+        write_vec3(address, offset + 12, vertex.normal)
+        write_vec2(address, offset + 24, vertex.uv)
+        write_rgba8(address, offset + 32, vertex.color)
+        write_vec2(address, offset + 36, center)
+        write_vec2(address, offset + 44, axis)
+        write_vec2(address, offset + 52, normal)
+        index++
+    }
     return bytes
 }
 
@@ -235,6 +272,36 @@ func write_affine_instance(
     write_float(address, offset + 24, depth)
     write_float(address, offset + 28, 0.0)
     write_color(address, offset + 32, color)
+    write_vec2(address, offset + 48, Math.Vec2())
+    write_float(address, offset + 56, 0.0)
+    write_float(address, offset + 60, 0.0)
+    write_color(address, offset + 64, Color.transparent())
+}
+
+func write_shadow_instance(
+    address:uint,
+    offset:int,
+    model_x:Math.Vec2,
+    model_y:Math.Vec2,
+    translation:Math.Vec2,
+    depth:float,
+    color:Color,
+    shadow_offset:Math.Vec2,
+    shadow_radius:float,
+    shadow_color:Color
+) {
+    write_affine_instance(
+        address,
+        offset,
+        model_x,
+        model_y,
+        translation,
+        depth,
+        color
+    )
+    write_vec2(address, offset + 48, shadow_offset)
+    write_float(address, offset + 56, shadow_radius)
+    write_color(address, offset + 64, shadow_color)
 }
 
 func copy_affine_instance(
@@ -244,7 +311,7 @@ func copy_affine_instance(
     source_offset:int
 ) {
     var byte_offset = 0
-    while byte_offset < 48 {
+    while byte_offset < 80 {
         let value = C.load<uint64>(source, (source_offset + byte_offset) as uint)
         let stored = C.store<uint64>(
             destination,
@@ -258,7 +325,7 @@ func copy_affine_instance(
 func copy_affine_instances(destination:uint, source:uint, count:int) {
     var index = 0
     while index < count {
-        copy_affine_instance(destination, index * 48, source, index * 48)
+        copy_affine_instance(destination, index * 80, source, index * 80)
         index++
     }
 }

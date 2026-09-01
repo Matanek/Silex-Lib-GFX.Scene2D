@@ -1,6 +1,11 @@
 use GFX.Assets.Image
 use GFX.Color
 use GFX.Canvas.TextLayer
+use GFX.Canvas.Content
+use GFX.Canvas.EffectValue
+use GFX.Canvas.Mesh
+use GFX.Canvas.ShadowEffect
+use GFX.Canvas.LayerContent
 use GFX.Canvas.Shapes.Rect
 use GFX.Font as VectorFont
 use GFX.ECS
@@ -31,6 +36,7 @@ class CachedSceneDrawing {
     var vertex_capacity:int
     var dirty:bool
     let mutable:bool
+    let vertex_stride:int
 
     init(
         snapshot_id:int,
@@ -38,7 +44,8 @@ class CachedSceneDrawing {
         geometry_hash:uint,
         packed_vertices:str,
         vertex_count:int,
-        mutable:bool = false
+        mutable:bool = false,
+        vertex_stride:int = 36
     ) {
         self.snapshot_id = snapshot_id
         self.geometry_revision = geometry_revision
@@ -48,6 +55,7 @@ class CachedSceneDrawing {
         self.vertex_capacity = 0
         self.dirty = true
         self.mutable = mutable
+        self.vertex_stride = vertex_stride
     }
 
     func bytes() str { return self.packed_vertices }
@@ -204,6 +212,11 @@ struct SceneDraw {
     let viewport:bool
 }
 
+struct AnalyticShadowIntent {
+    let geometry:Mesh
+    let effect:ShadowEffect
+}
+
 struct SpriteDraw {
     let cache:int
     let model:Math.Mat4
@@ -319,6 +332,7 @@ struct SceneEntry {
 
 package class Renderer {
     private var drawing_pipeline:GPU.GraphicsPipeline? = null
+    private var shadow_pipeline:GPU.GraphicsPipeline? = null
     private var sprite_pipeline:GPU.GraphicsPipeline? = null
     private var coverage_glyph_pipeline:GPU.GraphicsPipeline? = null
     private var grid_pipeline:GPU.GraphicsPipeline? = null
@@ -478,7 +492,7 @@ package class Renderer {
         drawing_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:36))
         drawing_buffers.append(GPU.VertexBufferLayout(
             slot:1,
-            pitch:48,
+            pitch:80,
             rate:GPU.VertexRate.instance
         ))
         var drawing_attributes:GPU.VertexAttribute[] = []
@@ -500,6 +514,41 @@ package class Renderer {
                 multisample:GPU.MultisampleState(samples:samples),
                 color_targets:target,
                 name:"GFX.Scene2D vector drawing"
+            )
+        )
+
+        var shadow_buffers:GPU.VertexBufferLayout[] = []
+        shadow_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:60))
+        shadow_buffers.append(GPU.VertexBufferLayout(
+            slot:1,
+            pitch:80,
+            rate:GPU.VertexRate.instance
+        ))
+        var shadow_attributes:GPU.VertexAttribute[] = []
+        shadow_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x3, offset:0))
+        shadow_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x3, offset:12))
+        shadow_attributes.append(GPU.VertexAttribute(location:2, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:24))
+        shadow_attributes.append(GPU.VertexAttribute(location:3, buffer_slot:0, format:GPU.VertexFormat.unsigned_8x4_normalized, offset:32))
+        shadow_attributes.append(GPU.VertexAttribute(location:4, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:0))
+        shadow_attributes.append(GPU.VertexAttribute(location:5, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:8))
+        shadow_attributes.append(GPU.VertexAttribute(location:6, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:16))
+        shadow_attributes.append(GPU.VertexAttribute(location:7, buffer_slot:1, format:GPU.VertexFormat.float_32, offset:24))
+        shadow_attributes.append(GPU.VertexAttribute(location:8, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:32))
+        shadow_attributes.append(GPU.VertexAttribute(location:9, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:36))
+        shadow_attributes.append(GPU.VertexAttribute(location:10, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:44))
+        shadow_attributes.append(GPU.VertexAttribute(location:11, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:52))
+        shadow_attributes.append(GPU.VertexAttribute(location:12, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:48))
+        shadow_attributes.append(GPU.VertexAttribute(location:13, buffer_slot:1, format:GPU.VertexFormat.float_32, offset:56))
+        shadow_attributes.append(GPU.VertexAttribute(location:14, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:64))
+        self.shadow_pipeline = device.graphics_pipeline(
+            GPU.ShaderProgram.hlsl(file:"../Shaders/AnalyticShadow.hlsl"),
+            GPU.GraphicsPipelineSettings(
+                vertex_buffers:shadow_buffers,
+                attributes:shadow_attributes,
+                rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                multisample:GPU.MultisampleState(samples:samples),
+                color_targets:target,
+                name:"GFX.Scene2D analytic Canvas shadow"
             )
         )
 
@@ -619,7 +668,7 @@ package class Renderer {
         self.coverage_upload_offset = 0
         self.vector_instances = 0
         self.drawing_instance_write_address = 0
-        if self.drawing_instance_storage_capacity >= 48 {
+        if self.drawing_instance_storage_capacity >= 80 {
             var bytes = self.drawing_instance_packed
             let address = C.address_bits(C.mutable_string_pointer(bytes))
             self.drawing_instance_packed = bytes
@@ -646,6 +695,23 @@ package class Renderer {
         canvas:@SceneCanvas
     ) {
         if !canvas.visible { return }
+        if !canvas.vector_geometry_compatible() {
+            let model = canvas.affine_model(transform, self.viewport)
+            var content = canvas.content()
+            if !analytic_shadow_eligible(content) {
+                panic(analytic_shadow_diagnostic())
+            }
+            var order = 0
+            self.collect_effect_content(
+                device,
+                entity,
+                canvas,
+                model,
+                content,
+                order
+            )
+            return
+        }
         let cache_index = self.prepared_scene_drawing_cache(
             device,
             entity.index,
@@ -654,7 +720,7 @@ package class Renderer {
         var cache = self.scene_drawing_cache[cache_index]
         let model = canvas.affine_model(transform, self.viewport)
         let draw_index = self.scene_draws.count()
-        self.ensure_scene_instance_storage((draw_index + 1) * 48)
+        self.ensure_scene_instance_storage((draw_index + 1) * 80)
         self.scene_draws.append(SceneDraw(
             kind:0,
             cache:cache_index,
@@ -666,7 +732,7 @@ package class Renderer {
         ))
         Packing.write_affine_instance(
             self.drawing_instance_write_address,
-            draw_index * 48,
+            draw_index * 80,
             model.x,
             model.y,
             model.translation,
@@ -676,6 +742,110 @@ package class Renderer {
         if canvas.has_text() {
             self.collect_canvas_text(device, entity, transform, canvas)
         }
+    }
+
+    private func collect_effect_content(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        canvas:@SceneCanvas,
+        model:AffineModel,
+        content:@Content[],
+        order:&int
+    ) {
+        for item in content {
+            match item {
+                geometry(mesh) => {
+                    let cache_index = self.register_content_drawing(device, mesh)
+                    self.append_canvas_draw(
+                        canvas,
+                        model,
+                        0,
+                        cache_index,
+                        entity.index * 2 + order
+                    )
+                    order++
+                }
+                layer(value) => {
+                    if let shadow = analytic_shadow_layer(value) {
+                        self.append_analytic_shadow(
+                            device,
+                            entity,
+                            canvas,
+                            model,
+                            shadow,
+                            order
+                        )
+                        order++
+                    } else {
+                        panic(analytic_shadow_diagnostic())
+                    }
+                }
+                text(value) => {}
+            }
+        }
+    }
+
+    private func append_analytic_shadow(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        canvas:@SceneCanvas,
+        model:AffineModel,
+        shadow:AnalyticShadowIntent,
+        order:int
+    ) {
+        let cache_index = self.register_shadow_drawing(device, shadow.geometry)
+        let draw_index = self.scene_draws.count()
+        self.ensure_scene_instance_storage((draw_index + 1) * 80)
+        self.scene_draws.append(SceneDraw(
+            kind:2,
+            cache:cache_index,
+            instance:draw_index,
+            layer:canvas.layer,
+            depth:canvas.depth,
+            order:entity.index * 2 + order,
+            viewport:canvas.uses_viewport()
+        ))
+        Packing.write_shadow_instance(
+            self.drawing_instance_write_address,
+            draw_index * 80,
+            model.x,
+            model.y,
+            model.translation,
+            canvas.depth,
+            canvas.color,
+            shadow.effect.offset,
+            shadow.effect.radius,
+            shadow.effect.color
+        )
+    }
+
+    private func append_canvas_draw(
+        canvas:@SceneCanvas,
+        model:AffineModel,
+        kind:int,
+        cache:int,
+        order:int
+    ) {
+        let draw_index = self.scene_draws.count()
+        self.ensure_scene_instance_storage((draw_index + 1) * 80)
+        self.scene_draws.append(SceneDraw(
+            kind:kind,
+            cache:cache,
+            instance:draw_index,
+            layer:canvas.layer,
+            depth:canvas.depth,
+            order:order,
+            viewport:canvas.uses_viewport()
+        ))
+        Packing.write_affine_instance(
+            self.drawing_instance_write_address,
+            draw_index * 80,
+            model.x,
+            model.y,
+            model.translation,
+            canvas.depth,
+            canvas.color
+        )
     }
 
     private func collect_canvas_text(
@@ -1235,7 +1405,7 @@ package class Renderer {
                 }
                 let model = composed_affine(authored, glyph)
                 let draw_index = self.scene_draws.count()
-                self.ensure_scene_instance_storage((draw_index + 1) * 48)
+                self.ensure_scene_instance_storage((draw_index + 1) * 80)
                 self.scene_draws.append(SceneDraw(
                     kind:1,
                     cache:glyph.cache,
@@ -1247,7 +1417,7 @@ package class Renderer {
                 ))
                 Packing.write_affine_instance(
                     self.drawing_instance_write_address,
-                    draw_index * 48,
+                    draw_index * 80,
                     model.x,
                     model.y,
                     model.translation,
@@ -1521,7 +1691,9 @@ package class Renderer {
                     end++
                 }
                 if cache.vertex_count > 0 {
-                    if let pipeline = self.drawing_pipeline {
+                    var selected_pipeline = self.drawing_pipeline
+                    if draw.kind == 2 { selected_pipeline = self.shadow_pipeline }
+                    if let pipeline = selected_pipeline {
                         if let vertices = cache.vertices {
                             if let instances = self.drawing_instances {
                                 var selected_projection = self.scene_view_projection
@@ -1566,7 +1738,9 @@ package class Renderer {
                 end++
             }
             if cache.vertex_count > 0 {
-                if let pipeline = self.drawing_pipeline {
+                var selected_pipeline = self.drawing_pipeline
+                if draw.kind == 2 { selected_pipeline = self.shadow_pipeline }
+                if let pipeline = selected_pipeline {
                     if let vertices = cache.vertices {
                         if let instances = self.drawing_instances {
                             var selected_projection = self.scene_view_projection
@@ -1586,7 +1760,9 @@ package class Renderer {
     }
 
     private func drawing_for(draw:@SceneDraw) CachedSceneDrawing {
-        if draw.kind == 0 { return self.scene_drawing_cache[draw.cache] }
+        if draw.kind == 0 || draw.kind == 2 {
+            return self.scene_drawing_cache[draw.cache]
+        }
         var slot = self.glyph_mesh_cache[draw.cache]
         if let drawing = slot.drawing { return drawing }
         panic("GFX.Scene2D vector glyph cache entry was evicted during a frame")
@@ -1836,6 +2012,66 @@ package class Renderer {
         return self.scene_drawing_cache.count() - 1
     }
 
+    private func register_content_drawing(
+        device:@GPU.Device,
+        geometry:@Mesh
+    ) int {
+        let packed = Packing.drawing_vertices(geometry)
+        return self.register_packed_drawing(
+            device,
+            packed,
+            geometry.vertex_count(),
+            36
+        )
+    }
+
+    private func register_shadow_drawing(
+        device:@GPU.Device,
+        geometry:@Mesh
+    ) int {
+        let packed = Packing.shadow_vertices(geometry)
+        return self.register_packed_drawing(
+            device,
+            packed,
+            geometry.vertex_count(),
+            60
+        )
+    }
+
+    private func register_packed_drawing(
+        device:@GPU.Device,
+        packed:str,
+        vertex_count:int,
+        vertex_stride:int
+    ) int {
+        let geometry_hash = Hashing.hash(packed)
+        var index = 0
+        while index < self.scene_drawing_cache.count() {
+            var cache = self.scene_drawing_cache[index]
+            if !cache.mutable && cache.vertex_stride == vertex_stride &&
+                cache.geometry_hash == geometry_hash &&
+                cache.packed_vertices == packed
+            {
+                self.refresh_scene_geometry(device, cache)
+                return index
+            }
+            index++
+        }
+        var created = CachedSceneDrawing(
+            -1,
+            1,
+            geometry_hash,
+            packed,
+            vertex_count,
+            vertex_stride:vertex_stride
+        )
+        self.scene_drawing_cache.append(created)
+        let created_index = self.scene_drawing_cache.count() - 1
+        var retained = self.scene_drawing_cache[created_index]
+        self.refresh_scene_geometry(device, retained)
+        return created_index
+    }
+
     private func retain_scene_drawing_snapshot(snapshot_id:int, cache_index:int) {
         if !self.scene_drawing_snapshots.contains(snapshot_id) {
             self.scene_drawing_snapshots.set(snapshot_id, cache_index)
@@ -1921,7 +2157,7 @@ package class Renderer {
     ) {
         if !cache.dirty { return }
         if cache.vertex_count == 0 { cache.dirty = false; return }
-        let byte_count = cache.vertex_count * 36
+        let byte_count = cache.vertex_count * cache.vertex_stride
         if cache.vertices == null || cache.vertex_capacity < byte_count {
             cache.upload = device.upload_buffer(
                 byte_count,
@@ -1959,6 +2195,14 @@ package class Renderer {
     }
 
     package func image_cache_count() int { return self.image_cache.count() }
+
+    package func analytic_shadow_draw_count() int {
+        var count = 0
+        for draw in self.scene_draws {
+            if draw.kind == 2 { count++ }
+        }
+        return count
+    }
 
     package func vector_outline_cache_hit_count() int { return self.outline_cache_hits }
     package func vector_tessellation_count() int { return self.glyph_tessellations }
@@ -2237,9 +2481,9 @@ package class Renderer {
         while index < self.scene_draws.count() {
             Packing.copy_affine_instance(
                 destination,
-                index * 48,
+                index * 80,
                 self.drawing_instance_write_address,
-                self.scene_draws[index].instance * 48
+                self.scene_draws[index].instance * 80
             )
             index++
         }
@@ -2251,7 +2495,7 @@ package class Renderer {
 
     private func prepare_scene_instances(device:@GPU.Device, reordered:bool) {
         if self.scene_draws.count() == 0 { return }
-        let byte_count = self.scene_draws.count() * 48
+        let byte_count = self.scene_draws.count() * 80
         if reordered { self.reorder_scene_instances(byte_count) }
         if self.drawing_instances == null || self.drawing_instance_capacity < byte_count {
             self.drawing_instance_upload = device.upload_buffer(
@@ -2322,6 +2566,81 @@ package class Renderer {
         }
     }
 
+}
+
+package func analytic_shadow_eligible(content:@Content[]) bool {
+    if content.count() != 1 { return false }
+    match content[0] {
+        layer(value) => { return analytic_shadow_layer(value) != null }
+        else => { return false }
+    }
+}
+
+package func analytic_shadow_diagnostic() str {
+    return "GFX.Scene2D Canvas filtered layer is not eligible for the " +
+        "analytic shadow path; the GPU effect compositor is not available"
+}
+
+// CPU mirror of the shader's one-dimensional Gaussian edge response. Tests
+// compare it with Canvas's separable software oracle independently of timing.
+package func analytic_blurred_coverage(edge:float, radius:float) float {
+    if radius <= 0.0 {
+        if edge < 0.0 { return 1.0 }
+        return 0.0
+    }
+    let sigma = Math.max(radius / 3.0, 1.0 / 3.0)
+    let value = edge / (sigma * 1.41421356237)
+    var sign = 1.0
+    if value < 0.0 { sign = -1.0 }
+    let x = Math.abs(value)
+    if x >= 1.75 {
+        return Math.clamp(0.5 * (1.0 - sign), 0.0, 1.0)
+    }
+    let squared = x * x
+    let polynomial = 1.128269906 + squared * (-0.374057723 +
+        squared * (0.106547438 + squared * (-0.019925391 +
+        squared * 0.001756081)))
+    let error = sign * x * polynomial
+    return Math.clamp(0.5 * (1.0 - error), 0.0, 1.0)
+}
+
+func analytic_shadow_layer(value:@LayerContent) AnalyticShadowIntent? {
+    let effects = value.effects()
+    if effects.count() != 1 { return null }
+    var shadow:ShadowEffect? = null
+    match effects[0].value() {
+        shadow(effect) => { shadow = effect }
+        else => { return null }
+    }
+    var content = value.content()
+    if content.count() != 1 { return null }
+    match content[0] {
+        geometry(mesh) => {
+            if !analytic_shadow_geometry(mesh) { return null }
+            if let effect = shadow {
+                return AnalyticShadowIntent(geometry:mesh, effect:effect)
+            }
+        }
+        else => {}
+    }
+    return null
+}
+
+func analytic_shadow_geometry(mesh:@Mesh) bool {
+    if mesh.vertex_count() != 6 || mesh.index_count() != 6 { return false }
+    let vertices = mesh.vertices()
+    if vertices[0].position.z < 0.0 { return false }
+    let alpha = vertices[0].color.a
+    let shape = vertices[0].normal
+    let mode = vertices[0].position.z
+    for vertex in vertices {
+        if vertex.position.z != mode || vertex.normal != shape ||
+            vertex.color.a != alpha
+        {
+            return false
+        }
+    }
+    return true
 }
 
 local func empty_coverage_glyph_table() int[] {

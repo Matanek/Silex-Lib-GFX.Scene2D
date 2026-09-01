@@ -114,6 +114,26 @@ Trois classes de détail stables couvrent le petit texte, le dessin courant et
 le fort agrandissement ; rester dans une classe ne retesselle pas. Une couleur,
 translation, rotation ou échelle ne modifie que l'instance GPU.
 
+## Rendre une ombre analytique
+
+Le renderer intégré possède un chemin GPU direct pour une couche Canvas qui
+contient exactement un effet `Effect.shadow(...)` et exactement une primitive
+analytique : rectangle, rectangle arrondi, cercle ou ligne. L'alpha de sa
+brosse doit être uniforme. Le shader évalue la forme et son flou gaussien dans
+un quad élargi ; il ne crée ni image CPU, ni texture d'effet, ni passe hors
+écran. Translation, rotation et échelle, y compris une échelle non uniforme,
+restent portées par l'instance. Une modification du placement ou des paramètres
+de l'ombre ne reconstruit donc pas la géométrie partagée.
+
+Ce contrat étroit est volontaire. Une couche contenant plusieurs primitives,
+un chemin, une image, une brosse dont l'alpha varie ou du texte n'est pas
+admissible. Cela vaut pour les modes texte vectoriel et coverage de
+`GFX.Font` : le texte reste vectoriel ou rasterisable selon le choix du
+composant, mais son ombre demande le compositeur d'effets général. Tant que ce
+dernier n'est pas installé, Scene2D échoue explicitement avec le diagnostic
+`Canvas filtered layer is not eligible for the analytic shadow path` au lieu
+d'ignorer l'effet.
+
 ## Comprendre la rétention et les caches
 
 Le composant conserve l'identité du `GFX.Canvas.Canvas` reçu. Si le producteur
@@ -182,9 +202,10 @@ application
 Un Bundle autonome peut aussi installer `Plugins.Scene2D()` directement ; il
 possède alors sa fenêtre et sa pile de rendu si elles ne viennent pas du parent.
 
-Les shaders `Drawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl` appartiennent à ce
-package. Ils ne constituent pas une API obligatoire ; une extension peut lire
-les données publiques de scène et fournir son propre `GPU.ShaderProgram.hlsl`.
+Les shaders `Drawing.hlsl`, `AnalyticShadow.hlsl`, `Grid.hlsl` et
+`Sprite.hlsl` appartiennent à ce package. Ils ne constituent pas une API
+obligatoire ; une extension peut lire les données publiques de scène et fournir
+son propre `GPU.ShaderProgram.hlsl`.
 
 La démonstration visuelle [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 appartient à Silex-Examples.
