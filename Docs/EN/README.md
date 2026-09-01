@@ -134,6 +134,14 @@ command retains an independent cache identity. An animated frame therefore
 rewrites mesh values without rebuilding its capacities. Changing only a label
 uploads neither geometry nor the other text layers.
 
+A `Canvas.ImagePaint` follows the same principle. Scene2D retains the mask mesh
+separately from the texture indexed by ImagePaint identity. An unchanged frame
+uploads nothing; `ImagePaint.replace(...)` uploads only that texture and keeps
+the rectangle, circle, or path buffer. The shader applies `fit` or `tile` in
+Canvas-local coordinates before evaluating the analytic mask. Rotation and
+non-uniform scale therefore remain instance properties rather than reasons to
+rebuild geometry.
+
 Sprite and text texture identities are indexed directly, so frame preparation
 remains linear in visible draws. The vector cache retains at most 2,048 glyph
 meshes and 256 prepared layers. After warm-up, static vector text performs no
@@ -175,7 +183,7 @@ application
 A self-contained Bundle may instead install `Plugins.Scene2D()` directly; it
 then owns its window and rendering stack when the parent does not provide them.
 
-The `Drawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this
+The `Drawing.hlsl`, `ImageDrawing.hlsl`, `Grid.hlsl`, and `Sprite.hlsl` shaders belong to this
 package. They are not a mandatory API; an extension can read public scene data
 and provide its own `GPU.ShaderProgram.hlsl`.
 

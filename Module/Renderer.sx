@@ -1,6 +1,9 @@
 use GFX.Assets.Image
 use GFX.Color
 use GFX.Canvas.TextLayer
+use GFX.Canvas.Content
+use GFX.Canvas.ImageContent
+use GFX.Canvas.Mesh
 use GFX.Canvas.Shapes.Rect
 use GFX.Font as VectorFont
 use GFX.ECS
@@ -204,6 +207,12 @@ struct SceneDraw {
     let viewport:bool
 }
 
+struct ImageMaskDraw {
+    let geometry_cache:int
+    let image_cache:int
+    let uniform:str
+}
+
 struct SpriteDraw {
     let cache:int
     let model:Math.Mat4
@@ -319,6 +328,7 @@ struct SceneEntry {
 
 package class Renderer {
     private var drawing_pipeline:GPU.GraphicsPipeline? = null
+    private var image_drawing_pipeline:GPU.GraphicsPipeline? = null
     private var sprite_pipeline:GPU.GraphicsPipeline? = null
     private var coverage_glyph_pipeline:GPU.GraphicsPipeline? = null
     private var grid_pipeline:GPU.GraphicsPipeline? = null
@@ -342,6 +352,7 @@ package class Renderer {
     private var geometry_refreshes:int
     private var canvas_synchronizations:int
     private var image_cache:CachedImage[]
+    private var image_uploads:int
     private var image_cache_indices:Dictionary<int, int>
     private var pending_image_uploads:int[]
     private var glyph_mesh_cache:GlyphMeshSlot[]
@@ -353,6 +364,7 @@ package class Renderer {
     private var coverage_rasters:int
     private var text_pixels_uploaded:int
     private var scene_draws:SceneDraw[]
+    private var image_mask_draws:ImageMaskDraw[]
     private var scene_draw_scratch:SceneDraw[]
     private var scene_layer_counts:int[]
     private var scene_layer_positions:int[]
@@ -413,6 +425,7 @@ package class Renderer {
         self.geometry_refreshes = 0
         self.canvas_synchronizations = 0
         self.image_cache = []
+        self.image_uploads = 0
         self.image_cache_indices = Dictionary<int, int>(minimum_capacity:256)
         self.pending_image_uploads = []
         self.glyph_mesh_cache = []
@@ -424,6 +437,7 @@ package class Renderer {
         self.coverage_rasters = 0
         self.text_pixels_uploaded = 0
         self.scene_draws = []
+        self.image_mask_draws = []
         self.scene_draw_scratch = []
         self.scene_layer_counts = []
         self.scene_layer_positions = []
@@ -500,6 +514,17 @@ package class Renderer {
                 multisample:GPU.MultisampleState(samples:samples),
                 color_targets:target,
                 name:"GFX.Scene2D vector drawing"
+            )
+        )
+        self.image_drawing_pipeline = device.graphics_pipeline(
+            GPU.ShaderProgram.hlsl(file:"../Shaders/ImageDrawing.hlsl"),
+            GPU.GraphicsPipelineSettings(
+                vertex_buffers:drawing_buffers,
+                attributes:drawing_attributes,
+                rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                multisample:GPU.MultisampleState(samples:samples),
+                color_targets:target,
+                name:"GFX.Scene2D Canvas image drawing"
             )
         )
 
@@ -610,6 +635,7 @@ package class Renderer {
         self.selected_camera = false
         self.selected_camera_order = 0
         self.scene_draws.clear()
+        self.image_mask_draws.clear()
         self.sprite_draws.clear()
         self.coverage_glyph_draws.clear()
         self.coverage_glyph_instances.clear()
@@ -646,6 +672,23 @@ package class Renderer {
         canvas:@SceneCanvas
     ) {
         if !canvas.visible { return }
+        if !canvas.vector_geometry_compatible() {
+            let model = canvas.affine_model(transform, self.viewport)
+            var content = canvas.content()
+            var order = 0
+            self.collect_canvas_content(
+                device,
+                entity,
+                canvas,
+                model,
+                content,
+                order
+            )
+            if canvas.has_text() {
+                self.collect_canvas_text(device, entity, transform, canvas)
+            }
+            return
+        }
         let cache_index = self.prepared_scene_drawing_cache(
             device,
             entity.index,
@@ -676,6 +719,121 @@ package class Renderer {
         if canvas.has_text() {
             self.collect_canvas_text(device, entity, transform, canvas)
         }
+    }
+
+    private func collect_canvas_content(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        canvas:@SceneCanvas,
+        model:AffineModel,
+        content:@Content[],
+        order:&int
+    ) {
+        for item in content {
+            match item {
+                geometry(mesh) => {
+                    let cache_index = self.register_content_drawing(device, mesh)
+                    self.append_canvas_scene_draw(
+                        canvas,
+                        model,
+                        0,
+                        cache_index,
+                        entity.index * 2048 + order
+                    )
+                    order++
+                }
+                image(value) => {
+                    self.collect_canvas_image(
+                        device,
+                        entity,
+                        canvas,
+                        model,
+                        value,
+                        order
+                    )
+                    order++
+                }
+                layer(value) => {
+                    if value.effects().count() > 0 {
+                        panic("GFX.Scene2D Canvas image layers with effects require the effect compositor")
+                    }
+                    var nested = value.content()
+                    self.collect_canvas_content(
+                        device,
+                        entity,
+                        canvas,
+                        model,
+                        nested,
+                        order
+                    )
+                }
+                text(value) => {}
+            }
+        }
+    }
+
+    private func collect_canvas_image(
+        device:@GPU.Device,
+        entity:ECS.Entity,
+        canvas:@SceneCanvas,
+        model:AffineModel,
+        content:ImageContent,
+        order:int
+    ) {
+        var paint = content.paint()
+        let image = paint.image()
+        let image_cache_index = self.cache_index_for_image(2, paint.id(), 0)
+        var image_cache = self.image_cache[image_cache_index]
+        self.refresh_image(
+            device,
+            image_cache,
+            paint.revision(),
+            image,
+            "GFX.Scene2D Canvas ImagePaint"
+        )
+        let geometry = content.geometry()
+        let geometry_cache = self.register_content_drawing(device, geometry)
+        self.image_mask_draws.append(ImageMaskDraw(
+            geometry_cache:geometry_cache,
+            image_cache:image_cache_index,
+            uniform:Packing.image_drawing_uniform(content)
+        ))
+        self.append_canvas_scene_draw(
+            canvas,
+            model,
+            2,
+            self.image_mask_draws.count() - 1,
+            entity.index * 2048 + order
+        )
+    }
+
+    private func append_canvas_scene_draw(
+        canvas:@SceneCanvas,
+        model:AffineModel,
+        kind:int,
+        cache:int,
+        order:int
+    ) {
+        let draw_index = self.scene_draws.count()
+        self.ensure_scene_instance_storage((draw_index + 1) * 48)
+        self.scene_draws.append(SceneDraw(
+            kind:kind,
+            cache:cache,
+            instance:draw_index,
+            layer:canvas.layer,
+            depth:canvas.depth,
+            order:order,
+            viewport:canvas.uses_viewport()
+        ))
+        Packing.write_affine_instance(
+            self.drawing_instance_write_address,
+            draw_index * 48,
+            model.x,
+            model.y,
+            model.translation,
+            canvas.depth,
+            canvas.color
+        )
     }
 
     private func collect_canvas_text(
@@ -1507,6 +1665,11 @@ package class Renderer {
             let entry = self.scene_entries[cursor]
             if entry.kind == 0 {
                 let draw = self.scene_draws[entry.index]
+                if draw.kind == 2 {
+                    self.draw_scene_image(pass, draw)
+                    cursor++
+                    continue
+                }
                 var cache = self.drawing_for(draw)
                 var end = cursor + 1
                 while end < self.scene_entries.count() {
@@ -1556,6 +1719,11 @@ package class Renderer {
         var cursor = 0
         while cursor < self.scene_draws.count() {
             let draw = self.scene_draws[cursor]
+            if draw.kind == 2 {
+                self.draw_scene_image(pass, draw)
+                cursor++
+                continue
+            }
             var cache = self.drawing_for(draw)
             var end = cursor + 1
             while end < self.scene_draws.count() &&
@@ -1587,9 +1755,39 @@ package class Renderer {
 
     private func drawing_for(draw:@SceneDraw) CachedSceneDrawing {
         if draw.kind == 0 { return self.scene_drawing_cache[draw.cache] }
+        if draw.kind == 2 {
+            return self.scene_drawing_cache[self.image_mask_draws[draw.cache].geometry_cache]
+        }
         var slot = self.glyph_mesh_cache[draw.cache]
         if let drawing = slot.drawing { return drawing }
         panic("GFX.Scene2D vector glyph cache entry was evicted during a frame")
+    }
+
+    private func draw_scene_image(pass:@GPU.RenderPass, draw:@SceneDraw) {
+        let image_draw = self.image_mask_draws[draw.cache]
+        var geometry = self.scene_drawing_cache[image_draw.geometry_cache]
+        var image = self.image_cache[image_draw.image_cache]
+        if geometry.vertex_count == 0 { return }
+        if let pipeline = self.image_drawing_pipeline {
+            if let vertices = geometry.vertices {
+                if let instances = self.drawing_instances {
+                    if let texture = image.texture {
+                        if let sampler = self.sampler {
+                            var selected_projection = self.scene_view_projection
+                            if draw.viewport { selected_projection = self.projection }
+                            var projection = Packing.view_projection(selected_projection)
+                            pass.bind(pipeline)
+                            pass.vertex_uniform(0, projection, 64)
+                            pass.fragment_uniform(0, image_draw.uniform, 80)
+                            pass.fragment_sampler(0, texture, sampler)
+                            pass.vertex_buffer(0, vertices)
+                            pass.vertex_buffer(1, instances)
+                            pass.draw(geometry.vertex_count, 1, 0, draw.instance)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func draw_scene_sprite(pass:@GPU.RenderPass, draw:SpriteDraw) {
@@ -1836,6 +2034,37 @@ package class Renderer {
         return self.scene_drawing_cache.count() - 1
     }
 
+    private func register_content_drawing(
+        device:@GPU.Device,
+        geometry:@Mesh
+    ) int {
+        let packed = Packing.drawing_vertices(geometry)
+        let geometry_hash = Hashing.hash(packed)
+        var index = 0
+        while index < self.scene_drawing_cache.count() {
+            var cache = self.scene_drawing_cache[index]
+            if !cache.mutable && cache.geometry_hash == geometry_hash &&
+                cache.packed_vertices == packed
+            {
+                self.refresh_scene_geometry(device, cache)
+                return index
+            }
+            index++
+        }
+        var created = CachedSceneDrawing(
+            -1,
+            1,
+            geometry_hash,
+            packed,
+            geometry.vertex_count()
+        )
+        self.scene_drawing_cache.append(created)
+        let created_index = self.scene_drawing_cache.count() - 1
+        var retained = self.scene_drawing_cache[created_index]
+        self.refresh_scene_geometry(device, retained)
+        return created_index
+    }
+
     private func retain_scene_drawing_snapshot(snapshot_id:int, cache_index:int) {
         if !self.scene_drawing_snapshots.contains(snapshot_id) {
             self.scene_drawing_snapshots.set(snapshot_id, cache_index)
@@ -1959,6 +2188,7 @@ package class Renderer {
     }
 
     package func image_cache_count() int { return self.image_cache.count() }
+    package func image_upload_count() int { return self.image_uploads }
 
     package func vector_outline_cache_hit_count() int { return self.outline_cache_hits }
     package func vector_tessellation_count() int { return self.glyph_tessellations }
@@ -2059,6 +2289,7 @@ package class Renderer {
         if cache.texture != null && cache.revision == revision { return }
         cache.texture = upload_texture(device, image, name)
         cache.revision = revision
+        self.image_uploads++
     }
 
     private func refresh_text_image(
