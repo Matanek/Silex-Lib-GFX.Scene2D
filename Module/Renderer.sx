@@ -165,7 +165,6 @@ class CoverageBlockCache {
     var density:float
     var color:Color
     var depth:float
-    var last_used:int
     var instances:GPU.Buffer? = null
     var upload:GPU.TransferBuffer? = null
     var capacity:int
@@ -177,7 +176,6 @@ class CoverageBlockCache {
         self.density = 0.0
         self.color = Color.transparent()
         self.depth = 0.0
-        self.last_used = 0
         self.capacity = 0
         self.ranges = []
     }
@@ -189,6 +187,11 @@ func image_cache_key(kind:int, index:int, generation:int) int {
     }
     let sum = index + generation
     return (sum * (sum + 1) / 2 + generation) * 2 + kind
+}
+
+func coverage_block_identity_hash(value:@int) uint {
+    let key = value as uint
+    return key ^ (key >> 7) ^ (key >> 17)
 }
 
 struct SceneDraw {
@@ -370,7 +373,12 @@ package class Renderer {
     private var coverage_instance_allocations:int
     private var coverage_block_cache:CoverageBlockCache[]
     private var coverage_block_cache_indices:Dictionary<int, int>
+    private var coverage_block_cache_cursor:int
     private var coverage_block_builds:int
+    private var coverage_block_cache_hits:int
+    private var coverage_block_cache_misses:int
+    private var coverage_block_cache_evictions:int
+    private var coverage_block_allocations:int
     private var scene_entries:SceneEntry[]
     private var drawing_instances:GPU.Buffer? = null
     private var drawing_instance_upload:GPU.TransferBuffer? = null
@@ -435,9 +443,15 @@ package class Renderer {
         self.coverage_instance_allocations = 0
         self.coverage_block_cache = []
         self.coverage_block_cache_indices = Dictionary<int, int>(
+            hash:coverage_block_identity_hash,
             minimum_capacity:128
         )
+        self.coverage_block_cache_cursor = 0
         self.coverage_block_builds = 0
+        self.coverage_block_cache_hits = 0
+        self.coverage_block_cache_misses = 0
+        self.coverage_block_cache_evictions = 0
+        self.coverage_block_allocations = 0
         self.scene_entries = []
         self.drawing_instance_capacity = 0
         self.drawing_instance_packed = "\0"
@@ -855,12 +869,16 @@ package class Renderer {
         let color = multiplied_color(layer.color(), canvas.color)
         var cache_index = self.coverage_block_cache_index(identity)
         if cache_index < 0 {
+            self.coverage_block_cache_misses++
             cache_index = self.reusable_coverage_block_cache()
             let previous_identity = self.coverage_block_cache[cache_index].identity
             if previous_identity > 0 {
+                self.coverage_block_cache_evictions++
                 self.coverage_block_cache_indices.remove(previous_identity)
             }
             self.coverage_block_cache_indices.set(identity, cache_index)
+        } else {
+            self.coverage_block_cache_hits++
         }
         var cache = self.coverage_block_cache[cache_index]
         let valid = cache.identity == identity && cache.revision == revision &&
@@ -925,6 +943,7 @@ package class Renderer {
             let byte_count = grouped.instances.count() * 64
             if byte_count > 0 {
                 if cache.instances == null || cache.capacity < byte_count {
+                    self.coverage_block_allocations++
                     var capacity = 4096
                     while capacity < byte_count { capacity *= 2 }
                     cache.upload = device.upload_buffer(
@@ -954,7 +973,6 @@ package class Renderer {
             cache.ranges = grouped.ranges
             self.coverage_block_builds++
         }
-        cache.last_used = self.prepare_generation
         let authored = canvas.affine_model(transform, self.viewport)
         let layer_position = layer.position()
         let model = translated_affine(authored, layer_position)
@@ -988,14 +1006,11 @@ package class Renderer {
             self.coverage_block_cache.append(CoverageBlockCache())
             return self.coverage_block_cache.count() - 1
         }
-        var selected = 0
-        var index = 1
-        while index < self.coverage_block_cache.count() {
-            if self.coverage_block_cache[index].last_used <
-                self.coverage_block_cache[selected].last_used
-            { selected = index }
-            index++
-        }
+        // GPU text residency is a bounded ring: eviction cost must remain
+        // constant after a long scroll through distinct retained blocks.
+        let selected = self.coverage_block_cache_cursor
+        self.coverage_block_cache_cursor =
+            (self.coverage_block_cache_cursor + 1) % 128
         return selected
     }
 
@@ -1967,6 +1982,49 @@ package class Renderer {
     }
     package func coverage_block_build_count() int { return self.coverage_block_builds }
     package func coverage_block_cache_count() int { return self.coverage_block_cache.count() }
+    package func coverage_block_cache_index_count() int {
+        return self.coverage_block_cache_indices.count()
+    }
+    package func coverage_block_cache_hit_count() int {
+        return self.coverage_block_cache_hits
+    }
+    package func coverage_block_cache_miss_count() int {
+        return self.coverage_block_cache_misses
+    }
+    package func coverage_block_cache_eviction_count() int {
+        return self.coverage_block_cache_evictions
+    }
+    package func coverage_block_allocation_count() int {
+        return self.coverage_block_allocations
+    }
+    package func coverage_glyph_slot_count() int {
+        return self.coverage_glyph_slots.count()
+    }
+    package func coverage_block_cache_index_is_consistent() bool {
+        if self.coverage_block_cache_indices.count() !=
+            self.coverage_block_cache.count()
+        {
+            return false
+        }
+        var index = 0
+        while index < self.coverage_block_cache.count() {
+            let identity = self.coverage_block_cache[index].identity
+            if identity <= 0 || !self.coverage_block_cache_indices.contains(identity) {
+                return false
+            }
+            index++
+        }
+        var entries = self.coverage_block_cache_indices.iterator()
+        while entry = entries.next() {
+            if entry.value < 0 || entry.value >= self.coverage_block_cache.count() {
+                return false
+            }
+            if self.coverage_block_cache[entry.value].identity != entry.key {
+                return false
+            }
+        }
+        return true
+    }
     package func glyph_mesh_count() int {
         var count = 0
         for slot in self.glyph_mesh_cache {

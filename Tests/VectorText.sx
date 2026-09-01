@@ -351,6 +351,8 @@ test "bound continuously changing coverage instances to a fixed GPU ring" {
 class RetainedChurnProbe {
     var frames:int = 0
     var entity:ECS.Entity? = null
+    var stable_glyph_slots:int = 0
+    var stable_drawing_cache:int = 0
 }
 
 func retained_churn_drawing(frame:int) Canvas {
@@ -388,10 +390,44 @@ func verify_retained_churn(
     controller:&Application.Controller
 ) {
     assert(renderer.coverage_block_cache_count() <= 128)
+    assert(renderer.coverage_block_cache_index_count() ==
+        renderer.coverage_block_cache_count())
+    assert(renderer.coverage_block_cache_index_is_consistent())
     assert(renderer.coverage_instance_allocation_count() == 0)
-    if probe.frames >= 144 {
+    if probe.frames == 16 {
+        probe.stable_glyph_slots = renderer.coverage_glyph_slot_count()
+        probe.stable_drawing_cache = renderer.drawing_cache_count()
+        assert(probe.stable_glyph_slots > 0)
+        assert(probe.stable_drawing_cache > 0)
+    }
+    if probe.frames > 0 && probe.frames % 64 == 0 {
+        print(
+            "GFX_SCENE2D retained_depth blocks=$(probe.frames) cache=" +
+            "$(renderer.coverage_block_cache_count()) index=" +
+            "$(renderer.coverage_block_cache_index_count()) hits=" +
+            "$(renderer.coverage_block_cache_hit_count()) misses=" +
+            "$(renderer.coverage_block_cache_miss_count()) evictions=" +
+            "$(renderer.coverage_block_cache_eviction_count()) allocations=" +
+            "$(renderer.coverage_block_allocation_count()) pages=" +
+            "$(renderer.coverage_atlas_page_count()) glyph_slots=" +
+            "$(renderer.coverage_glyph_slot_count()) draws=" +
+            "$(renderer.coverage_glyph_draw_count()) instances=" +
+            "$(renderer.coverage_glyph_instance_count()) snapshots=" +
+            "$(renderer.drawing_snapshot_count()) drawings=" +
+            "$(renderer.drawing_cache_count())"
+        )
+    }
+    if probe.frames >= 256 {
         assert(renderer.coverage_block_cache_count() == 128)
-        assert(renderer.coverage_block_build_count() >= 144)
+        assert(renderer.coverage_block_cache_index_count() == 128)
+        assert(renderer.coverage_block_cache_miss_count() >= 256)
+        assert(renderer.coverage_block_cache_eviction_count() ==
+            renderer.coverage_block_cache_miss_count() - 128)
+        assert(renderer.coverage_block_allocation_count() == 128)
+        assert(renderer.coverage_glyph_slot_count() == probe.stable_glyph_slots)
+        assert(renderer.coverage_atlas_page_count() == 1)
+        assert(renderer.drawing_cache_count() == probe.stable_drawing_cache)
+        assert(renderer.drawing_snapshot_count() == 1)
         assert(renderer.coverage_glyph_draw_count() <= renderer.coverage_atlas_page_count())
         controller.stop()
         return
