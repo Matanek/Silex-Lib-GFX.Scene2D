@@ -1,0 +1,127 @@
+use GFX.GPU
+
+public enum CanvasFilterABI {
+    v1
+}
+
+public struct CanvasFilterCompatibility {
+    let accepted:bool
+    let detail:str
+}
+
+// Retained post-Canvas fragment program. The source Canvas is isolated first;
+// parameters can then change independently without invalidating that source.
+public class CanvasFilter {
+    private static var next_identity:int = 1
+    private let current_identity:int
+    private var current_revision:int
+    private let current_program:GPU.ShaderProgram
+    private var current_parameters:uint8[]
+
+    init(program:GPU.ShaderProgram) {
+        let compatibility = CanvasFilter.compatibility(program)
+        if !compatibility.accepted { panic(compatibility.detail) }
+        self.current_identity = CanvasFilter.next_identity
+        CanvasFilter.next_identity++
+        self.current_revision = 1
+        self.current_program = program
+        self.current_parameters = []
+    }
+
+    init(program:GPU.ShaderProgram, parameters:uint8[]) {
+        require_parameters(parameters, -1)
+        let compatibility = CanvasFilter.compatibility(
+            program,
+            parameters.count()
+        )
+        if !compatibility.accepted { panic(compatibility.detail) }
+        self.current_identity = CanvasFilter.next_identity
+        CanvasFilter.next_identity++
+        self.current_revision = 1
+        self.current_program = program
+        self.current_parameters = copied_parameters(parameters)
+    }
+
+    func abi() CanvasFilterABI { return CanvasFilterABI.v1 }
+    func id() int { return self.current_identity }
+    func revision() int { return self.current_revision }
+    func parameter_size() int { return self.current_parameters.count() }
+
+    static func compatibility(
+        program:GPU.ShaderProgram,
+        parameter_size:int = 0
+    ) CanvasFilterCompatibility {
+        if parameter_size < 0 || parameter_size > 4096 ||
+            parameter_size % 16 != 0
+        {
+            return CanvasFilterCompatibility(
+                accepted:false,
+                detail:"GFX.Scene2D CanvasFilter parameters must contain 0 to 4096 bytes in 16-byte blocks"
+            )
+        }
+        return canvas_filter_compatibility(program, parameter_size > 0)
+    }
+
+    func replace(parameters:uint8[]) {
+        require_parameters(parameters, self.current_parameters.count())
+        self.current_parameters = copied_parameters(parameters)
+        self.current_revision++
+    }
+
+    package func program() GPU.ShaderProgram { return self.current_program }
+    package func parameters() uint8[] { return self.current_parameters }
+}
+
+func canvas_filter_compatibility(
+    program:@GPU.ShaderProgram,
+    parameters:bool
+) CanvasFilterCompatibility {
+    let layout = program.layout()
+    if layout.vertex.entry != "vertex_main" ||
+        layout.fragment.entry != "fragment_main"
+    {
+        return CanvasFilterCompatibility(
+            accepted:false,
+            detail:"GFX.Scene2D CanvasFilter.v1 requires vertex_main and fragment_main"
+        )
+    }
+    if layout.vertex.samplers != 0 || layout.vertex.storage_textures != 0 ||
+        layout.vertex.storage_buffers != 0 ||
+        layout.vertex.uniform_buffers != 1
+    {
+        return CanvasFilterCompatibility(
+            accepted:false,
+            detail:"GFX.Scene2D CanvasFilter.v1 vertex resources must be exactly one b0 constant buffer"
+        )
+    }
+    var fragment_uniforms = 1
+    if parameters { fragment_uniforms = 2 }
+    if layout.fragment.samplers != 1 ||
+        layout.fragment.storage_textures != 0 ||
+        layout.fragment.storage_buffers != 0 ||
+        layout.fragment.uniform_buffers != fragment_uniforms
+    {
+        return CanvasFilterCompatibility(
+            accepted:false,
+            detail:"GFX.Scene2D CanvasFilter.v1 fragment resources must be t0/s0, b0, and optional b1"
+        )
+    }
+    return CanvasFilterCompatibility(accepted:true, detail:"")
+}
+
+func require_parameters(parameters:@uint8[], previous_size:int) {
+    if parameters.count() == 0 || parameters.count() > 4096 ||
+        parameters.count() % 16 != 0
+    {
+        panic("GFX.Scene2D CanvasFilter parameters must contain 16 to 4096 bytes in 16-byte blocks")
+    }
+    if previous_size >= 0 && parameters.count() != previous_size {
+        panic("GFX.Scene2D CanvasFilter replacement must preserve its parameter block size")
+    }
+}
+
+func copied_parameters(source:@uint8[]) uint8[] {
+    var result:uint8[] = []
+    for value in source { result.append(value) }
+    return result
+}

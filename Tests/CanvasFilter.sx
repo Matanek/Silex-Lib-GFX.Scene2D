@@ -1,0 +1,159 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use GFX.Scene2D.Packing
+use Interop.C
+use STD.Math
+
+func density(model:@GFX.Scene2D.Canvas.AffineModel) float {
+    return Math.max(
+        Math.sqrt(model.x.length_squared()),
+        Math.sqrt(model.y.length_squared())
+    )
+}
+
+func packed_float(bytes:@str, offset:int) float {
+    return C.load<float32>(
+        C.address_bits(C.pointer(bytes)),
+        offset as uint
+    ) as float
+}
+
+test "publish the exact CanvasFilter.v1 unit domain and 96-byte context" {
+    let vertices = Packing.quad_vertices()
+    assert(C.byte_count(vertices) == 64 as uint)
+    assert(packed_float(vertices, 0) == 0.0)
+    assert(packed_float(vertices, 4) == 0.0)
+    assert(packed_float(vertices, 16) == 1.0)
+    assert(packed_float(vertices, 20) == 0.0)
+    assert(packed_float(vertices, 32) == 1.0)
+    assert(packed_float(vertices, 36) == 1.0)
+    assert(packed_float(vertices, 48) == 0.0)
+    assert(packed_float(vertices, 52) == 1.0)
+
+    let context = Packing.canvas_filter_uniform(
+        Canvas.Rect(Math.Vec2(-4.0, 6.0), Math.Vec2(8.0, 10.0)),
+        4,
+        5
+    )
+    assert(C.byte_count(context) == 96 as uint)
+    assert(packed_float(context, 0) == 2.0)
+    assert(packed_float(context, 20) == -2.0)
+    assert(packed_float(context, 48) == -1.0)
+    assert(packed_float(context, 52) == 1.0)
+    assert(packed_float(context, 64) == -4.0)
+    assert(packed_float(context, 68) == 6.0)
+    assert(packed_float(context, 72) == 8.0)
+    assert(packed_float(context, 76) == 10.0)
+    assert(packed_float(context, 80) == 4.0)
+    assert(packed_float(context, 84) == 5.0)
+    assert(packed_float(context, 88) == 0.25)
+    assert(packed_float(context, 92) == 0.2)
+    assert(0.5 * packed_float(context, 88) == 0.125)
+    assert(0.5 * packed_float(context, 92) == 0.1)
+}
+
+test "reject divergent CanvasFilter entry points resources and parameters" {
+    let valid = GPU.ShaderProgram.hlsl(
+        file:"Consumer/Tests/Shaders/CanvasFilterV1.hlsl"
+    )
+    let parameterized = GPU.ShaderProgram.hlsl(
+        file:"Consumer/Tests/Shaders/CanvasFilterParametersV1.hlsl"
+    )
+    let divergent = GPU.ShaderProgram.hlsl(file:"../Shaders/CanvasEffect.hlsl")
+    assert(Scene2D.CanvasFilter.compatibility(valid).accepted)
+    assert(Scene2D.CanvasFilter.compatibility(parameterized, 16).accepted)
+    assert(!Scene2D.CanvasFilter.compatibility(parameterized).accepted)
+    let incompatible = Scene2D.CanvasFilter.compatibility(divergent)
+    assert(!incompatible.accepted)
+    assert(incompatible.detail != "")
+    assert(!Scene2D.CanvasFilter.compatibility(valid, 12).accepted)
+    assert(!Scene2D.CanvasFilter.compatibility(valid, 4112).accepted)
+}
+
+test "share filtered placement results until the density class changes" {
+    var device = GPU.Device()
+    var surfaces = Scene2D.CanvasSurfaceRenderer(device)
+
+    let program = GPU.ShaderProgram.hlsl(
+        file:"Consumer/Tests/Shaders/CanvasFilterV1.hlsl"
+    )
+    var filter = Scene2D.CanvasFilter(program)
+    var drawing = Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Circle(Math.Vec2(16.0), 12.0),
+            Canvas.Fill.solid(Color.white())
+        )
+    })
+    var first = Scene2D.Canvas(drawing, 32, 32)
+    first.filter = filter
+    first.color = Color.cyan_400()
+    var second = Scene2D.Canvas(drawing, 32, 32)
+    second.filter = filter
+    second.color = Color.amber_400()
+    var denser = Scene2D.Canvas(drawing, 32, 32)
+    denser.filter = filter
+
+    let first_model = first.affine_model(
+        Scene2D.Transform(position:Math.Vec2(12.0, 18.0)),
+        Math.Vec2(256.0)
+    )
+    let second_model = second.affine_model(
+        Scene2D.Transform(
+            position:Math.Vec2(90.0, 42.0),
+            rotation:Math.pi() * 0.25
+        ),
+        Math.Vec2(256.0)
+    )
+    if let frame = first.filter_frame() {
+        var snapshot = first.authored_snapshot()
+        var first_surface = surfaces.render(
+            snapshot,
+            frame,
+            density(first_model),
+            first.text_mode,
+            filter
+        )
+    } else { assert(false) }
+    if let frame = second.filter_frame() {
+        var snapshot = second.authored_snapshot()
+        var second_surface = surfaces.render(
+            snapshot,
+            frame,
+            density(second_model),
+            second.text_mode,
+            filter
+        )
+    } else { assert(false) }
+
+    assert(surfaces.render_count() == 1)
+    assert(surfaces.filter_render_count() == 1)
+    assert(surfaces.cache_hit_count() == 1)
+    assert(surfaces.filter_cache_hit_count() == 1)
+    assert(surfaces.filter_pipeline_creation_count() == 1)
+
+    let denser_model = denser.affine_model(
+        Scene2D.Transform(
+            position:Math.Vec2(140.0, 80.0),
+            scale:Math.Vec2(1.3)
+        ),
+        Math.Vec2(256.0)
+    )
+    if let frame = denser.filter_frame() {
+        var snapshot = denser.authored_snapshot()
+        var denser_surface = surfaces.render(
+            snapshot,
+            frame,
+            density(denser_model),
+            denser.text_mode,
+            filter
+        )
+    } else { assert(false) }
+
+    assert(surfaces.render_count() == 2)
+    assert(surfaces.filter_render_count() == 2)
+    assert(surfaces.filter_pipeline_creation_count() == 1)
+    assert(surfaces.filter_pipeline_cache_hit_count() == 1)
+    assert(surfaces.rgba_upload_count() == 0)
+}

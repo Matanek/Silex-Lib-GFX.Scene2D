@@ -1,0 +1,150 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+func download(
+    device:@GPU.Device,
+    surface:@Scene2D.CanvasSurface
+) uint8[] {
+    var buffer = device.download_buffer(surface.width() * surface.height() * 4)
+    var commands = device.commands()
+    var transfer = commands.copy()
+    transfer.download(
+        GPU.TextureRegion(
+            texture:surface.texture(),
+            width:surface.width(),
+            height:surface.height()
+        ),
+        buffer,
+        surface.width(),
+        surface.height()
+    )
+    transfer.finish()
+    var completed = commands.submit_and_track()
+    completed.wait()
+    return buffer.read()
+}
+
+test "attach a public CanvasFilter.v1 without renderer internals" {
+    let program = GPU.ShaderProgram.hlsl(file:"Shaders/CanvasFilterV1.hlsl")
+    var filter = Scene2D.CanvasFilter(program)
+    var drawing = Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(), Math.Vec2(32.0, 24.0)),
+            Canvas.Fill.solid(Color.cyan_400())
+        )
+    })
+    var placement = Scene2D.Canvas(drawing, 32, 24)
+    placement.filter = filter
+
+    assert(filter.abi() == Scene2D.CanvasFilterABI.v1)
+    assert(filter.revision() == 1)
+    assert(filter.parameter_size() == 0)
+    if let attached = placement.filter {
+        assert(attached.id() == filter.id())
+    } else {
+        assert(false)
+    }
+}
+
+test "filter a public CanvasSurface and reuse the retained result" {
+    var device = GPU.Device()
+    let program = GPU.ShaderProgram.hlsl(file:"Shaders/CanvasFilterV1.hlsl")
+    var filter = Scene2D.CanvasFilter(program)
+    var drawing = Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(), Math.Vec2(8.0)),
+            Canvas.Fill.solid(Color(r:0.25, g:0.5, b:0.75, a:1.0))
+        )
+    })
+    var snapshot = drawing.snapshot(8, 8)
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var first = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(8.0)),
+        1.0,
+        Scene2D.CanvasTextMode.automatic,
+        filter
+    )
+    var second = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(8.0)),
+        1.0,
+        Scene2D.CanvasTextMode.automatic,
+        filter
+    )
+    let pixels = download(device, second)
+
+    assert(first.revision() == second.revision())
+    assert(renderer.render_count() == 1)
+    assert(renderer.filter_render_count() == 1)
+    assert(renderer.filter_cache_hit_count() == 1)
+    assert(renderer.filter_pipeline_creation_count() == 1)
+    assert(second.texture().format() == GPU.TextureFormat.rgba8_unorm)
+    assert(second.texture().samples() == GPU.Samples.one)
+    assert(pixels[3] == 255 as uint8)
+    assert(pixels[0] >= 62 as uint8 && pixels[0] <= 65 as uint8)
+    assert(pixels[1] >= 126 as uint8 && pixels[1] <= 129 as uint8)
+    assert(pixels[2] >= 190 as uint8 && pixels[2] <= 193 as uint8)
+}
+
+test "replace parameters without rerendering the Canvas source" {
+    var device = GPU.Device()
+    let program = GPU.ShaderProgram.hlsl(
+        file:"Shaders/CanvasFilterParametersV1.hlsl"
+    )
+    var opaque:uint8[] = [
+        0, 0, 128, 63,
+        0, 0, 128, 63,
+        0, 0, 128, 63,
+        0, 0, 128, 63
+    ]
+    var filter = Scene2D.CanvasFilter(program, opaque)
+    var drawing = Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(), Math.Vec2(8.0)),
+            Canvas.Fill.solid(Color.white())
+        )
+    })
+    var snapshot = drawing.snapshot(8, 8)
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var first = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(8.0)),
+        1.0,
+        Scene2D.CanvasTextMode.automatic,
+        filter
+    )
+    let allocations = renderer.texture_allocation_count()
+
+    opaque = [
+        0, 0, 0, 63,
+        0, 0, 0, 63,
+        0, 0, 0, 63,
+        0, 0, 128, 63
+    ]
+    filter.replace(opaque)
+    var changed = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(8.0)),
+        1.0,
+        Scene2D.CanvasTextMode.automatic,
+        filter
+    )
+    let pixels = download(device, changed)
+
+    assert(filter.revision() == 2)
+    assert(changed.revision() > first.revision())
+    assert(renderer.render_count() == 1)
+    assert(renderer.cache_hit_count() == 1)
+    assert(renderer.filter_render_count() == 2)
+    assert(renderer.filter_pipeline_creation_count() == 1)
+    assert(renderer.filter_pipeline_cache_hit_count() == 1)
+    assert(renderer.texture_allocation_count() == allocations)
+    assert(pixels[0] >= 126 as uint8 && pixels[0] <= 129 as uint8)
+    assert(pixels[1] >= 126 as uint8 && pixels[1] <= 129 as uint8)
+    assert(pixels[2] >= 126 as uint8 && pixels[2] <= 129 as uint8)
+    assert(pixels[3] == 255 as uint8)
+}
