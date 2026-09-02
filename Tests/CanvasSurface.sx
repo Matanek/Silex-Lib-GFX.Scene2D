@@ -393,6 +393,7 @@ test "invalidate only the mutated root while retaining its filtered child" {
     var first = renderer.render(first_snapshot, frame, 1.0)
     assert(renderer.render_count() == 2)
     let cache_entries = renderer.cache_entry_count()
+    let allocations = renderer.texture_allocation_count()
     let resident_bytes = renderer.texture_byte_count()
 
     drawing.paint(func(painter:&Canvas.Painter) {
@@ -407,6 +408,7 @@ test "invalidate only the mutated root while retaining its filtered child" {
     assert(renderer.render_count() == 3)
     assert(renderer.cache_hit_count() == 3)
     assert(renderer.cache_entry_count() == cache_entries)
+    assert(renderer.texture_allocation_count() == allocations)
     assert(renderer.texture_byte_count() == resident_bytes)
     assert(first.is_valid())
 
@@ -427,7 +429,42 @@ test "invalidate only the mutated root while retaining its filtered child" {
     assert(moved.revision() > changed.revision())
     assert(renderer.render_count() == 5)
     assert(renderer.cache_entry_count() == cache_entries)
+    assert(renderer.texture_allocation_count() == allocations)
     assert(renderer.texture_byte_count() == resident_bytes)
     assert(first.is_valid())
     assert(changed.is_valid())
+}
+
+test "replace one retained vector text cache entry across revisions" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(160.0, 32.0))
+    var drawing = Canvas.Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text("phase 0", Math.Vec2(4.0, 4.0))
+    })
+    var previous = drawing.snapshot(160, 32)
+    var first = renderer.render(
+        previous,
+        frame,
+        1.0,
+        Scene2D.CanvasTextMode.vector
+    )
+    var phase = 1
+    while phase <= 20 {
+        drawing.clear()
+        drawing.paint(func(painter:&Canvas.Painter) {
+            painter.text("phase $(phase)", Math.Vec2(4.0, 4.0))
+        })
+        var current = drawing.snapshot(160, 32, reuse:previous)
+        var surface = renderer.render(
+            current,
+            frame,
+            1.0,
+            Scene2D.CanvasTextMode.vector
+        )
+        previous = current
+        phase++
+    }
+    assert(renderer.content_vector_layer_cache_count() == 1)
 }

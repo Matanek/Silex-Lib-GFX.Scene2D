@@ -131,6 +131,33 @@ class SurfaceCacheEntry {
         return result
     }
 
+    func storage_matches(
+        width:int,
+        height:int,
+        formats:@GPU.TextureFormat[]
+    ) bool {
+        if self.textures.count() != formats.count() + 2 { return false }
+        var index = 0
+        while index < self.textures.count() - 1 {
+            var expected = GPU.TextureFormat.rgba8_unorm
+            if index > 0 { expected = formats[index - 1] }
+            var texture = self.textures[index]
+            if texture.width() != width || texture.height() != height ||
+                texture.format() != expected ||
+                texture.samples() != GPU.Samples.one
+            {
+                return false
+            }
+            index++
+        }
+        var multisample = self.textures[self.textures.count() - 1]
+        return multisample.width() == width && multisample.height() == height &&
+            multisample.format() == GPU.TextureFormat.rgba8_unorm &&
+            multisample.samples() == GPU.Samples.four
+    }
+
+    func release_surface() { self.surface = null }
+
     func release() {
         self.surface = null
         self.textures.clear()
@@ -254,6 +281,7 @@ public class CanvasSurfaceRenderer {
     private var filter_cache_hits:int
     private var filter_pipeline_creations:int
     private var filter_pipeline_hits:int
+    private var frame_commands:GPU.CommandBuffer? = null
 
     init() {
         self.device_owner = null
@@ -276,6 +304,7 @@ public class CanvasSurfaceRenderer {
         self.filter_cache_hits = 0
         self.filter_pipeline_creations = 0
         self.filter_pipeline_hits = 0
+        self.frame_commands = null
     }
 
     public init(device:GPU.Device) {
@@ -299,6 +328,20 @@ public class CanvasSurfaceRenderer {
         self.filter_cache_hits = 0
         self.filter_pipeline_creations = 0
         self.filter_pipeline_hits = 0
+        self.frame_commands = null
+    }
+
+    module func begin_frame(device:@GPU.Device) {
+        self.require_initialized(device)
+        if self.frame_commands != null {
+            panic("GFX.Scene2D CanvasSurface frame recording is already active")
+        }
+        self.frame_commands = device.commands()
+    }
+
+    module func finish_frame() {
+        if var commands = self.frame_commands { commands.submit() }
+        self.frame_commands = null
     }
 
     func render(
@@ -347,6 +390,37 @@ public class CanvasSurfaceRenderer {
     ) CanvasSurface {
         var source = self.render_snapshot(
             device, snapshot, frame, density, text_mode, false
+        )
+        if let selected = filter {
+            return self.render_filter(device, source, selected)
+        }
+        return source
+    }
+
+    // Scene2D has already synchronized the authored Canvas into Prepared.
+    // Consume that retained content directly so filtered placement does not
+    // build a second Snapshot with fresh text identities every frame.
+    module func render_retained_on(
+        device:@GPU.Device,
+        identity:int,
+        revision:int,
+        content:@Content[],
+        frame:Rect,
+        density:float,
+        text_mode:TextMode = TextMode.automatic,
+        filter:CanvasFilter? = null
+    ) CanvasSurface {
+        var source = self.render_content(
+            device,
+            3,
+            identity,
+            revision,
+            content,
+            [],
+            frame,
+            density,
+            text_mode,
+            false
         )
         if let selected = filter {
             return self.render_filter(device, source, selected)
@@ -447,30 +521,33 @@ public class CanvasSurfaceRenderer {
                             source.width(),
                             source.height()
                         )
-                        var commands = device.commands()
-                        var pass = commands.render(GPU.ColorTarget(
-                            texture:target,
-                            clear:Color.transparent(),
-                            load:GPU.Load.clear,
-                            store:GPU.Store.preserve,
-                            cycle:false
-                        ))
-                        pass.bind(pipeline)
-                        pass.vertex_uniform(0, base, 96)
-                        pass.fragment_uniform(0, base, 96)
-                        var parameters = filter.parameters()
-                        if !parameters.is_empty() {
-                            pass.fragment_uniform(
-                                1,
-                                @parameters[0:parameters.count()]
+                        if var commands = self.frame_commands {
+                            self.record_filter_pass(
+                                commands,
+                                target,
+                                pipeline,
+                                base,
+                                filter,
+                                source_texture,
+                                sampler,
+                                vertices,
+                                indices
                             )
+                        } else {
+                            var commands = device.commands()
+                            self.record_filter_pass(
+                                commands,
+                                target,
+                                pipeline,
+                                base,
+                                filter,
+                                source_texture,
+                                sampler,
+                                vertices,
+                                indices
+                            )
+                            commands.submit()
                         }
-                        pass.fragment_sampler(0, source_texture, sampler)
-                        pass.vertex_buffer(0, vertices)
-                        pass.index_buffer(indices)
-                        pass.draw_indexed(6)
-                        pass.finish()
-                        commands.submit()
 
                         self.current_surface_revision++
                         var surface = CanvasSurface(
@@ -491,6 +568,38 @@ public class CanvasSurfaceRenderer {
             }
         }
         panic("GFX.Scene2D CanvasFilter.v1 resources are unavailable")
+    }
+
+    private func record_filter_pass(
+        commands:&GPU.CommandBuffer,
+        target:GPU.Texture,
+        pipeline:@GPU.GraphicsPipeline,
+        base:str,
+        filter:@CanvasFilter,
+        source:@GPU.Texture,
+        sampler:@GPU.Sampler,
+        vertices:@GPU.Buffer,
+        indices:@GPU.Buffer
+    ) {
+        var pass = commands.render(GPU.ColorTarget(
+            texture:target,
+            clear:Color.transparent(),
+            load:GPU.Load.clear,
+            store:GPU.Store.preserve,
+            cycle:false
+        ))
+        pass.bind(pipeline)
+        pass.vertex_uniform(0, base, 96)
+        pass.fragment_uniform(0, base, 96)
+        var parameters = filter.parameters()
+        if !parameters.is_empty() {
+            pass.fragment_uniform(1, @parameters[0:parameters.count()])
+        }
+        pass.fragment_sampler(0, source, sampler)
+        pass.vertex_buffer(0, vertices)
+        pass.index_buffer(indices)
+        pass.draw_indexed(6)
+        pass.finish()
     }
 
     func replace_device(device:GPU.Device) {
@@ -544,6 +653,18 @@ public class CanvasSurfaceRenderer {
     }
     func coverage_glyph_slot_count() int {
         return self.content_renderer.coverage_glyph_slot_count()
+    }
+    func content_geometry_cache_count() int {
+        return self.content_renderer.drawing_cache_count()
+    }
+    func content_image_cache_count() int {
+        return self.content_renderer.image_cache_count()
+    }
+    func content_vector_layer_cache_count() int {
+        return self.content_renderer.vector_layer_cache_count()
+    }
+    func content_glyph_mesh_count() int {
+        return self.content_renderer.glyph_mesh_count()
     }
 
     module func bind(device:@GPU.Device) {
@@ -621,9 +742,20 @@ public class CanvasSurfaceRenderer {
             text_mode
         )
         if entry_index < 0 { entry_index = self.reusable_entry() }
+        let width = Math.max(1.0, Math.ceil(frame.size.x * resolved_density)) as int
+        let height = Math.max(1.0, Math.ceil(frame.size.y * resolved_density)) as int
+        if width > 16_384 || height > 16_384 {
+            panic("GFX.Scene2D CanvasSurface exceeds the portable 16384 texel limit")
+        }
+        var formats = effect_output_formats(effects)
         var entry = self.entries[entry_index]
-        self.resident_texture_bytes -= entry.texture_byte_count()
-        entry.release()
+        let reuse_storage = entry.storage_matches(width, height, formats)
+        if reuse_storage {
+            entry.release_surface()
+        } else {
+            self.resident_texture_bytes -= entry.texture_byte_count()
+            entry.release()
+        }
         entry.kind = kind
         entry.identity = identity
         entry.revision = revision
@@ -631,27 +763,23 @@ public class CanvasSurfaceRenderer {
         entry.frame = frame
         entry.text_mode = text_mode
 
-        let width = Math.max(1.0, Math.ceil(frame.size.x * resolved_density)) as int
-        let height = Math.max(1.0, Math.ceil(frame.size.y * resolved_density)) as int
-        if width > 16_384 || height > 16_384 {
-            panic("GFX.Scene2D CanvasSurface exceeds the portable 16384 texel limit")
+        if !reuse_storage {
+            let texture_count = 1 + formats.count()
+            var texture_index = 0
+            while texture_index < texture_count {
+                var format = GPU.TextureFormat.rgba8_unorm
+                if texture_index > 0 { format = formats[texture_index - 1] }
+                entry.textures.append(self.make_texture(
+                    device,
+                    width,
+                    height,
+                    texture_index,
+                    format
+                ))
+                texture_index++
+            }
+            entry.textures.append(self.make_multisample_texture(device, width, height))
         }
-        var formats = effect_output_formats(effects)
-        let texture_count = 1 + formats.count()
-        var texture_index = 0
-        while texture_index < texture_count {
-            var format = GPU.TextureFormat.rgba8_unorm
-            if texture_index > 0 { format = formats[texture_index - 1] }
-            entry.textures.append(self.make_texture(
-                device,
-                width,
-                height,
-                texture_index,
-                format
-            ))
-            texture_index++
-        }
-        entry.textures.append(self.make_multisample_texture(device, width, height))
         let source_multisample = entry.textures.count() - 1
 
         self.content_renderer.begin_prepare(
@@ -664,10 +792,11 @@ public class CanvasSurfaceRenderer {
                 content,
                 frame,
                 text_mode,
-                self
+                self,
+                identity,
+                revision
             )
             self.content_renderer.finish_prepare(device)
-            var commands = device.commands()
             var source_targets:GPU.ColorTarget[] = []
             source_targets.append(GPU.ColorTarget(
                 texture:entry.textures[source_multisample],
@@ -678,10 +807,17 @@ public class CanvasSurfaceRenderer {
                 cycle:false,
                 cycle_resolve:false
             ))
-            var pass = commands.render(source_targets)
-            self.content_renderer.draw(pass)
-            pass.finish()
-            commands.submit()
+            if var commands = self.frame_commands {
+                var pass = commands.render(source_targets)
+                self.content_renderer.draw(pass)
+                pass.finish()
+            } else {
+                var commands = device.commands()
+                var pass = commands.render(source_targets)
+                self.content_renderer.draw(pass)
+                pass.finish()
+                commands.submit()
+            }
 
             self.last_graph_passes += build_effect_graph(effects)
             let final_index = self.apply_effects(
@@ -918,25 +1054,57 @@ public class CanvasSurfaceRenderer {
         }
         if let pipeline = selected {
             if let sampler = self.effect_sampler {
-                var commands = device.commands()
-                var pass = commands.render(GPU.ColorTarget(
-                    texture:target,
-                    clear:Color.transparent(),
-                    load:GPU.Load.clear,
-                    store:GPU.Store.preserve,
-                    cycle:false
-                ))
-                pass.bind(pipeline)
-                pass.fragment_uniform(0, uniform, 64)
-                pass.fragment_sampler(0, source, sampler)
-                pass.fragment_sampler(1, auxiliary, sampler)
-                pass.draw(3)
-                pass.finish()
-                commands.submit()
+                if var commands = self.frame_commands {
+                    self.record_effect_pass(
+                        commands,
+                        source,
+                        auxiliary,
+                        target,
+                        pipeline,
+                        sampler,
+                        uniform
+                    )
+                } else {
+                    var commands = device.commands()
+                    self.record_effect_pass(
+                        commands,
+                        source,
+                        auxiliary,
+                        target,
+                        pipeline,
+                        sampler,
+                        uniform
+                    )
+                    commands.submit()
+                }
                 return
             }
         }
         panic("GFX.Scene2D Canvas effect pipeline is unavailable")
+    }
+
+    private func record_effect_pass(
+        commands:&GPU.CommandBuffer,
+        source:@GPU.Texture,
+        auxiliary:@GPU.Texture,
+        target:GPU.Texture,
+        pipeline:@GPU.GraphicsPipeline,
+        sampler:@GPU.Sampler,
+        uniform:str
+    ) {
+        var pass = commands.render(GPU.ColorTarget(
+            texture:target,
+            clear:Color.transparent(),
+            load:GPU.Load.clear,
+            store:GPU.Store.preserve,
+            cycle:false
+        ))
+        pass.bind(pipeline)
+        pass.fragment_uniform(0, uniform, 64)
+        pass.fragment_sampler(0, source, sampler)
+        pass.fragment_sampler(1, auxiliary, sampler)
+        pass.draw(3)
+        pass.finish()
     }
 
     private func make_texture(

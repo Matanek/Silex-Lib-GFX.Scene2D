@@ -66,6 +66,7 @@ func prepare_scene(
     surfaces:&CanvasSurfaceRenderer
 ) {
     renderer.begin_prepare(window)
+    surfaces.begin_frame(device)
     for (transform, camera) in cameras {
         renderer.consider_camera(transform, camera)
     }
@@ -75,6 +76,7 @@ func prepare_scene(
     for (entity, transform, sprite) in sprites {
         renderer.collect_sprite(device, entity, transform, sprite, images)
     }
+    surfaces.finish_frame()
     renderer.finish_prepare(device)
 }
 

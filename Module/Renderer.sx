@@ -369,6 +369,10 @@ package class Renderer {
     private var scene_drawing_snapshot_generations:Dictionary<int, int>
     private var mutable_scene_drawings:Dictionary<int, int>
     private var mutable_content_drawings:Dictionary<int, int>
+    private var surface_content_drawings:Dictionary<int, int>
+    private var surface_content_identity:int
+    private var surface_content_revision:int
+    private var surface_content_canvas:SceneCanvas
     private var synchronized_authored_canvases:Dictionary<int, int>
     private var last_scene_snapshot_id:int
     private var last_scene_cache_index:int
@@ -445,6 +449,18 @@ package class Renderer {
         self.scene_drawing_snapshot_generations = Dictionary<int, int>(minimum_capacity:256)
         self.mutable_scene_drawings = Dictionary<int, int>(minimum_capacity:64)
         self.mutable_content_drawings = Dictionary<int, int>(minimum_capacity:64)
+        self.surface_content_drawings = Dictionary<int, int>(minimum_capacity:128)
+        self.surface_content_identity = 0
+        self.surface_content_revision = 0
+        var surface_authored = AuthoredCanvas()
+        var surface_canvas = SceneCanvas(surface_authored)
+        surface_canvas.space = Space.viewport
+        surface_canvas.pivot = Math.Vec2()
+        surface_canvas.color = Color.white()
+        surface_canvas.layer = 0
+        surface_canvas.depth = 0.0
+        surface_canvas.coverage_density = 1.0
+        self.surface_content_canvas = surface_canvas
         self.synchronized_authored_canvases = Dictionary<int, int>(minimum_capacity:64)
         self.last_scene_snapshot_id = -1
         self.last_scene_cache_index = -1
@@ -780,10 +796,12 @@ package class Renderer {
             if let frame = canvas.filter_frame() {
                 let model = canvas.affine_model(transform, self.viewport)
                 let density = effect_density(model, self.display_scale)
-                var snapshot = canvas.authored_snapshot()
-                var surface = surfaces.render_on(
+                var content = canvas.content()
+                var surface = surfaces.render_retained_on(
                     device,
-                    snapshot,
+                    canvas.authored_id(),
+                    -canvas.prepared_revision(),
+                    content,
                     frame,
                     density,
                     canvas.text_mode,
@@ -966,17 +984,14 @@ package class Renderer {
         content:@Content[],
         frame:Rect,
         text_mode:TextMode,
-        surfaces:&CanvasSurfaceRenderer
+        surfaces:&CanvasSurfaceRenderer,
+        identity:int,
+        revision:int
     ) {
-        var authored = AuthoredCanvas()
-        var canvas = SceneCanvas(authored)
-        canvas.space = Space.viewport
-        canvas.pivot = Math.Vec2()
-        canvas.color = Color.white()
-        canvas.layer = 0
-        canvas.depth = 0.0
+        self.surface_content_identity = identity
+        self.surface_content_revision = revision
+        var canvas = self.surface_content_canvas
         canvas.text_mode = text_mode
-        canvas.coverage_density = 1.0
         var transform = Transform(position:frame.position.multiply(-1.0))
         let model = canvas.affine_model(transform, self.viewport)
         var order = 0
@@ -991,6 +1006,8 @@ package class Renderer {
             order,
             surfaces
         )
+        self.surface_content_identity = 0
+        self.surface_content_revision = 0
     }
 
     private func append_analytic_shadow(
@@ -1809,7 +1826,16 @@ package class Renderer {
             glyphs
         )
         let key = layer.id() * 3 + detail
-        var slot_index = self.vector_layer_cache.count()
+        var slot_index = -1
+        var existing = 0
+        while existing < self.vector_layer_cache.count() {
+            if self.vector_layer_cache[existing].key == key {
+                slot_index = existing
+                break
+            }
+            existing++
+        }
+        if slot_index < 0 { slot_index = self.vector_layer_cache.count() }
         if slot_index >= 256 { slot_index = key % 256 }
         if slot_index == self.vector_layer_cache.count() {
             self.vector_layer_cache.append(VectorLayerSlot())
@@ -2380,8 +2406,23 @@ package class Renderer {
         canvas:@SceneCanvas,
         geometry:@Mesh
     ) int {
+        if self.surface_content_identity > 0 {
+            return self.surface_content_drawing(
+                device,
+                order,
+                0,
+                geometry,
+                36
+            )
+        }
         if !canvas.is_detached() && canvas.revision() <= 1 {
-            return self.register_content_drawing(device, geometry)
+            let key = self.mutable_content_key(entity_index, order, 0, canvas)
+            if self.mutable_content_drawings.contains(key) {
+                return self.mutable_content_drawings.get(key) + 0
+            }
+            let cache_index = self.register_content_drawing(device, geometry)
+            self.mutable_content_drawings.set(key, cache_index)
+            return cache_index
         }
         let packed = Packing.drawing_vertices(geometry)
         return self.mutable_content_drawing(
@@ -2415,8 +2456,23 @@ package class Renderer {
         canvas:@SceneCanvas,
         geometry:@Mesh
     ) int {
+        if self.surface_content_identity > 0 {
+            return self.surface_content_drawing(
+                device,
+                order,
+                1,
+                geometry,
+                60
+            )
+        }
         if !canvas.is_detached() && canvas.revision() <= 1 {
-            return self.register_shadow_drawing(device, geometry)
+            let key = self.mutable_content_key(entity_index, order, 1, canvas)
+            if self.mutable_content_drawings.contains(key) {
+                return self.mutable_content_drawings.get(key) + 0
+            }
+            let cache_index = self.register_shadow_drawing(device, geometry)
+            self.mutable_content_drawings.set(key, cache_index)
+            return cache_index
         }
         let packed = Packing.shadow_vertices(geometry)
         return self.mutable_content_drawing(
@@ -2440,6 +2496,55 @@ package class Renderer {
             return entity_index * 8_192 + order * 2 + format
         }
         return -(canvas.authored_id() * 8_192 + order * 2 + format) - 1
+    }
+
+    private func surface_content_drawing(
+        device:@GPU.Device,
+        order:int,
+        format:int,
+        geometry:@Mesh,
+        vertex_stride:int
+    ) int {
+        let key = self.surface_content_identity * 8_192 + order * 2 + format
+        var packed = Packing.drawing_vertices(geometry)
+        if format == 1 { packed = Packing.shadow_vertices(geometry) }
+        let geometry_hash = Hashing.hash(packed)
+        if self.surface_content_drawings.contains(key) {
+            let cache_index:int = self.surface_content_drawings.get(key) + 0
+            var cache = self.scene_drawing_cache[cache_index]
+            if cache.snapshot_id != self.surface_content_revision {
+                if cache.geometry_hash == geometry_hash &&
+                    cache.packed_vertices == packed
+                {
+                    cache.retain_snapshot(self.surface_content_revision)
+                } else {
+                    cache.replace(
+                        self.surface_content_revision,
+                        self.surface_content_revision,
+                        geometry_hash,
+                        packed + "",
+                        geometry.vertex_count()
+                    )
+                }
+            }
+            self.refresh_scene_geometry(device, cache)
+            return cache_index
+        }
+        var created = CachedSceneDrawing(
+            self.surface_content_revision,
+            self.surface_content_revision,
+            geometry_hash,
+            packed,
+            geometry.vertex_count(),
+            mutable:true,
+            vertex_stride:vertex_stride
+        )
+        self.scene_drawing_cache.append(created)
+        let cache_index = self.scene_drawing_cache.count() - 1
+        self.surface_content_drawings.set(key, cache_index)
+        var retained = self.scene_drawing_cache[cache_index]
+        self.refresh_scene_geometry(device, retained)
+        return cache_index
     }
 
     private func mutable_content_drawing(
@@ -2643,6 +2748,10 @@ package class Renderer {
 
     package func drawing_cache_count() int {
         return self.scene_drawing_cache.count()
+    }
+
+    package func vector_layer_cache_count() int {
+        return self.vector_layer_cache.count()
     }
 
     package func drawing_snapshot_count() int {

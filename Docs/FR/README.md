@@ -264,7 +264,12 @@ réintroduit.
 Le cache distingue identité et révision du contenu, frame logique, mode texte
 et classe de densité arrondie au quart supérieur. Un placement rigide réutilise
 donc la surface locale ; franchir une classe de densité, muter le contenu ou
-remplacer une ressource concernée recrée seulement les entrées nécessaires.
+remplacer une ressource concernée invalide seulement les entrées nécessaires.
+Lorsque dimensions et formats restent identiques, une nouvelle révision réécrit
+les textures retenues sans nouvelle allocation. Dans le parcours Scene2D, les
+passes source, effets et filtre de toutes les surfaces d’une frame sont aussi
+enregistrées dans un seul command buffer avant soumission ; l’API autonome
+`CanvasSurfaceRenderer.render` conserve sa soumission immédiate.
 `render_count()`, `cache_hit_count()`, `graph_pass_count()`,
 `texture_allocation_count()` et `texture_byte_count()` mesurent ce travail et
 la mémoire actuellement résidente dans le cache ; une surface encore conservée

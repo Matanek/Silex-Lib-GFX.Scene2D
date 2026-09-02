@@ -252,7 +252,12 @@ SDL_ttf text or RGBA line upload is reintroduced.
 The cache distinguishes content identity and revision, logical frame, text
 mode, and a density class rounded upward to the next quarter. A rigid placement
 therefore reuses its local surface; crossing a density class, mutating content,
-or replacing a referenced resource recreates only the required entries.
+or replacing a referenced resource invalidates only the required entries. When
+dimensions and formats remain identical, a new revision rewrites retained
+textures without another allocation. On the Scene2D path, source, effect, and
+filter passes for every surface in a frame are also recorded into one command
+buffer before submission; standalone `CanvasSurfaceRenderer.render` keeps its
+immediate submission contract.
 `render_count()`, `cache_hit_count()`, `graph_pass_count()`,
 `texture_allocation_count()`, and `texture_byte_count()` report that work and
 currently cache-resident memory; a surface still retained by a consumer is not
