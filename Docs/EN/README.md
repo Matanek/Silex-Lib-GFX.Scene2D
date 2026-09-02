@@ -90,6 +90,11 @@ to `Sampling.pixelated`.
 `cell_origin(column, row)` returns a cell's local origin. Out-of-grid input
 returns `null` for hit testing and fails explicitly for `tile`, `set`, `clear`,
 or `cell_origin`.
+
+The `Silex-Examples/Sources/Games/Minesweeper` application is the complete
+consumer demonstration: several retained layers represent up to 256×256
+cells, while camera movement prepares only the guarded visible ranges.
+
 `Camera.unproject()` performs the inverse operation for hit testing. It uses
 the same viewport fallback as `project()` and returns `null` when the transform
 cannot be inverted.

@@ -95,6 +95,12 @@ placement comme pour un sprite. Le mode d’échantillonnage initial est
 que `cell_origin(column, row)` retourne l’origine locale d’une cellule. Une
 coordonnée hors grille renvoie `null` pour le hit-test et provoque une erreur
 explicite pour `tile`, `set`, `clear` ou `cell_origin`.
+
+L’application `Silex-Examples/Sources/Games/Minesweeper` en fournit la
+démonstration consommatrice complète : plusieurs couches retenues représentent
+jusqu’à 256×256 cellules, tandis que les mouvements de caméra ne préparent que
+les plages visibles munies de leur garde.
+
 `Camera.unproject()` effectue l’opération inverse pour le hit-test. Elle
 emploie le même fallback de viewport que `project()` et renvoie `null` si la
 transformation n’est pas inversible.
