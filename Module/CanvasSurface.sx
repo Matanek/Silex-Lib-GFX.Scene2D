@@ -480,7 +480,7 @@ public class CanvasSurfaceRenderer {
         exact_density:bool
     ) CanvasSurface {
         self.last_graph_passes = 0
-        let content = snapshot.content_view()
+        var content = snapshot.content()
         var kind = 0
         if exact_density { kind = 2 }
         return self.render_content(
@@ -488,7 +488,7 @@ public class CanvasSurfaceRenderer {
             kind,
             snapshot.canvas_id(),
             snapshot.geometry_revision() * 65_537 + snapshot.text_revision(),
-            content,
+            @content[0:content.count()],
             [],
             frame,
             density,

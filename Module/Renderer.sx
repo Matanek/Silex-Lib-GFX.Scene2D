@@ -803,12 +803,12 @@ package class Renderer {
             if let frame = canvas.filter_frame() {
                 let model = canvas.affine_model(transform, self.viewport)
                 let density = effect_density(model, self.display_scale)
-                let content = canvas.content_view()
+                var content = canvas.content()
                 var surface = surfaces.render_retained_on(
                     device,
                     canvas.authored_id(),
                     -canvas.prepared_revision(),
-                    content,
+                    @content[0:content.count()],
                     frame,
                     density,
                     canvas.text_mode,
@@ -825,7 +825,7 @@ package class Renderer {
         }
         if !canvas.vector_geometry_compatible() || canvas.has_text() {
             let model = canvas.affine_model(transform, self.viewport)
-            let content = canvas.content_view()
+            var content = canvas.content()
             var order = 0
             self.collect_canvas_content(
                 device,
@@ -833,7 +833,7 @@ package class Renderer {
                 transform,
                 canvas,
                 model,
-                content,
+                @content[0:content.count()],
                 order,
                 surfaces
             )
