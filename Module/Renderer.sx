@@ -434,6 +434,7 @@ package class Renderer {
     private var drawing_instance_scratch:str
     private var drawing_instance_storage_capacity:int
     private var drawing_instance_write_address:uint
+    private var upload_commands:GPU.CommandBuffer? = null
     private var projection:Math.Mat4
     private var scene_view_projection:Math.Mat4
     private var viewport:Math.Vec2
@@ -522,6 +523,7 @@ package class Renderer {
         self.drawing_instance_scratch = "\0"
         self.drawing_instance_storage_capacity = 1
         self.drawing_instance_write_address = 0
+        self.upload_commands = null
         self.projection = Math.Mat4.identity()
         self.scene_view_projection = Math.Mat4.identity()
         self.viewport = Math.Vec2(1.0)
@@ -730,7 +732,11 @@ package class Renderer {
         ), display_scale)
     }
 
-    package func begin_prepare(viewport:Math.Vec2, display_scale:float) {
+    package func begin_prepare(
+        viewport:Math.Vec2,
+        display_scale:float,
+        upload_commands:GPU.CommandBuffer? = null
+    ) {
         if viewport.x <= 0.0 || viewport.y <= 0.0 {
             panic("GFX.Scene2D render viewport must be positive")
         }
@@ -738,6 +744,7 @@ package class Renderer {
             panic("GFX.Scene2D render density must be positive")
         }
         self.prepare_generation++
+        self.upload_commands = upload_commands
         self.canvas_synchronizations = 0
         self.synchronized_authored_canvases.clear()
         self.display_scale = display_scale
@@ -796,7 +803,7 @@ package class Renderer {
             if let frame = canvas.filter_frame() {
                 let model = canvas.affine_model(transform, self.viewport)
                 let density = effect_density(model, self.display_scale)
-                var content = canvas.content()
+                let content = canvas.content_view()
                 var surface = surfaces.render_retained_on(
                     device,
                     canvas.authored_id(),
@@ -818,7 +825,7 @@ package class Renderer {
         }
         if !canvas.vector_geometry_compatible() || canvas.has_text() {
             let model = canvas.affine_model(transform, self.viewport)
-            var content = canvas.content()
+            let content = canvas.content_view()
             var order = 0
             self.collect_canvas_content(
                 device,
@@ -871,7 +878,7 @@ package class Renderer {
         transform:@Transform,
         canvas:@SceneCanvas,
         model:AffineModel,
-        content:@Content[],
+        content:@Content[..],
         order:&int,
         surfaces:&CanvasSurfaceRenderer
     ) {
@@ -907,7 +914,7 @@ package class Renderer {
                 }
                 layer(value) => {
                     if value.effects().is_empty() {
-                        var nested = value.content()
+                        let nested = value.content_view()
                         self.collect_canvas_content(
                             device,
                             entity,
@@ -981,7 +988,7 @@ package class Renderer {
 
     package func collect_surface_content(
         device:@GPU.Device,
-        content:@Content[],
+        content:@Content[..],
         frame:Rect,
         text_mode:TextMode,
         surfaces:&CanvasSurfaceRenderer,
@@ -1950,6 +1957,7 @@ package class Renderer {
         }
         self.prepare_scene_instances(device, reordered)
         self.prune_scene_drawing_snapshots()
+        self.upload_commands = null
     }
 
     func draw(pass:@GPU.RenderPass) {
@@ -2739,7 +2747,11 @@ package class Renderer {
         if let upload = cache.upload {
             if let destination = cache.vertices {
                 upload.write_packed(cache.bytes(), byte_count, cycle:true)
-                copy_buffer(device, upload, destination, byte_count)
+                if var commands = self.upload_commands {
+                    copy_buffer_on(commands, upload, destination, byte_count)
+                } else {
+                    copy_buffer(device, upload, destination, byte_count)
+                }
             }
         }
         self.geometry_refreshes++
@@ -3151,6 +3163,10 @@ package class Renderer {
 }
 
 package func analytic_shadow_eligible(content:@Content[]) bool {
+    return analytic_shadow_eligible_view(@content[0:content.count()])
+}
+
+func analytic_shadow_eligible_view(content:@Content[..]) bool {
     if content.count() != 1 { return false }
     match content[0] {
         layer(value) => { return analytic_shadow_layer(value) != null }
@@ -3194,7 +3210,7 @@ func analytic_shadow_layer(value:@LayerContent) AnalyticShadowIntent? {
         shadow(effect) => { shadow = effect }
         else => { return null }
     }
-    var content = value.content()
+    let content = value.content_view()
     if content.count() != 1 { return null }
     match content[0] {
         geometry(mesh) => {
@@ -3314,6 +3330,18 @@ local func copy_buffer(
     transfer.upload(upload, destination, count, cycle:cycle)
     transfer.finish()
     commands.submit()
+}
+
+local func copy_buffer_on(
+    commands:&GPU.CommandBuffer,
+    upload:@GPU.TransferBuffer,
+    destination:@GPU.Buffer,
+    count:int,
+    cycle:bool = true
+) {
+    var transfer = commands.copy()
+    transfer.upload(upload, destination, count, cycle:cycle)
+    transfer.finish()
 }
 
 local func upload_texture(

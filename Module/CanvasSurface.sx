@@ -87,7 +87,7 @@ class SurfaceCacheEntry {
     var density_key:int
     var frame:Rect
     var text_mode:TextMode
-    var textures:GPU.Texture[]
+    var texture:GPU.Texture? = null
     var surface:CanvasSurface? = null
 
     module init() {
@@ -97,7 +97,6 @@ class SurfaceCacheEntry {
         self.density_key = -1
         self.frame = Rect(Math.Vec2(), Math.Vec2(1.0))
         self.text_mode = TextMode.automatic
-        self.textures = []
     }
 
     func matches(
@@ -126,44 +125,71 @@ class SurfaceCacheEntry {
     }
 
     func texture_byte_count() int {
-        var result = 0
-        for texture in self.textures { result += texture.byte_count() }
-        return result
+        if let retained = self.texture { return retained.byte_count() }
+        return 0
     }
 
-    func storage_matches(
-        width:int,
-        height:int,
-        formats:@GPU.TextureFormat[]
-    ) bool {
-        if self.textures.count() != formats.count() + 2 { return false }
-        var index = 0
-        while index < self.textures.count() - 1 {
-            var expected = GPU.TextureFormat.rgba8_unorm
-            if index > 0 { expected = formats[index - 1] }
-            var texture = self.textures[index]
-            if texture.width() != width || texture.height() != height ||
-                texture.format() != expected ||
-                texture.samples() != GPU.Samples.one
-            {
-                return false
-            }
-            index++
+    func storage_matches(width:int, height:int) bool {
+        if let retained = self.texture {
+            return retained.width() == width && retained.height() == height &&
+                retained.format() == GPU.TextureFormat.rgba8_unorm &&
+                retained.samples() == GPU.Samples.one
         }
-        var multisample = self.textures[self.textures.count() - 1]
-        return multisample.width() == width && multisample.height() == height &&
-            multisample.format() == GPU.TextureFormat.rgba8_unorm &&
-            multisample.samples() == GPU.Samples.four
+        return false
     }
 
     func release_surface() { self.surface = null }
 
     func release() {
         self.surface = null
-        self.textures.clear()
+        self.texture = null
         self.kind = -1
         self.identity = -1
         self.revision = -1
+    }
+}
+
+class SurfaceWorkspace {
+    let width:int
+    let height:int
+    var formats:GPU.TextureFormat[]
+    var textures:GPU.Texture[]
+    var multisample:GPU.Texture
+
+    init(
+        width:int,
+        height:int,
+        formats:GPU.TextureFormat[],
+        textures:GPU.Texture[],
+        multisample:GPU.Texture
+    ) {
+        self.width = width
+        self.height = height
+        self.formats = formats
+        self.textures = textures
+        self.multisample = multisample
+    }
+
+    func matches(
+        width:int,
+        height:int,
+        formats:@GPU.TextureFormat[]
+    ) bool {
+        if self.width != width || self.height != height ||
+            self.formats.count() != formats.count()
+        { return false }
+        var index = 0
+        while index < formats.count() {
+            if self.formats[index] != formats[index] { return false }
+            index++
+        }
+        return true
+    }
+
+    func byte_count() int {
+        var result = self.multisample.byte_count()
+        for texture in self.textures { result += texture.byte_count() }
+        return result
     }
 }
 
@@ -282,6 +308,9 @@ public class CanvasSurfaceRenderer {
     private var filter_pipeline_creations:int
     private var filter_pipeline_hits:int
     private var frame_commands:GPU.CommandBuffer? = null
+    private var frame_render_passes:int
+    private var workspaces:SurfaceWorkspace[]
+    private var workspace_eviction_cursor:int
 
     init() {
         self.device_owner = null
@@ -305,6 +334,9 @@ public class CanvasSurfaceRenderer {
         self.filter_pipeline_creations = 0
         self.filter_pipeline_hits = 0
         self.frame_commands = null
+        self.frame_render_passes = 0
+        self.workspaces = []
+        self.workspace_eviction_cursor = 0
     }
 
     public init(device:GPU.Device) {
@@ -329,6 +361,9 @@ public class CanvasSurfaceRenderer {
         self.filter_pipeline_creations = 0
         self.filter_pipeline_hits = 0
         self.frame_commands = null
+        self.frame_render_passes = 0
+        self.workspaces = []
+        self.workspace_eviction_cursor = 0
     }
 
     module func begin_frame(device:@GPU.Device) {
@@ -337,11 +372,19 @@ public class CanvasSurfaceRenderer {
             panic("GFX.Scene2D CanvasSurface frame recording is already active")
         }
         self.frame_commands = device.commands()
+        self.frame_render_passes = 0
     }
 
     module func finish_frame() {
-        if var commands = self.frame_commands { commands.submit() }
+        if var commands = self.frame_commands {
+            if self.frame_render_passes > 0 {
+                commands.submit()
+            } else {
+                commands.cancel()
+            }
+        }
         self.frame_commands = null
+        self.frame_render_passes = 0
     }
 
     func render(
@@ -404,7 +447,7 @@ public class CanvasSurfaceRenderer {
         device:@GPU.Device,
         identity:int,
         revision:int,
-        content:@Content[],
+        content:@Content[..],
         frame:Rect,
         density:float,
         text_mode:TextMode = TextMode.automatic,
@@ -437,7 +480,7 @@ public class CanvasSurfaceRenderer {
         exact_density:bool
     ) CanvasSurface {
         self.last_graph_passes = 0
-        var content = snapshot.content()
+        let content = snapshot.content_view()
         var kind = 0
         if exact_density { kind = 2 }
         return self.render_content(
@@ -562,6 +605,7 @@ public class CanvasSurfaceRenderer {
                         entry.surface = surface
                         self.filter_renders++
                         self.last_graph_passes++
+                        self.retain_frame_passes(device, 1)
                         return surface
                     }
                 }
@@ -619,6 +663,8 @@ public class CanvasSurfaceRenderer {
         self.effect_pipeline = null
         self.effect_float_pipeline = null
         self.effect_sampler = null
+        self.workspaces.clear()
+        self.workspace_eviction_cursor = 0
         self.content_renderer = Renderer()
         self.initialized = false
         self.current_device_generation++
@@ -681,7 +727,7 @@ public class CanvasSurfaceRenderer {
         text_mode:TextMode
     ) CanvasSurface {
         self.bind(device)
-        var content = layer.content()
+        let content = layer.content_view()
         var effects = layer.effects()
         var frame = Rect(Math.Vec2(), Math.Vec2(1.0 / density))
         if let bounds = layer.bounds() { frame = bounds }
@@ -704,7 +750,7 @@ public class CanvasSurfaceRenderer {
         kind:int,
         identity:int,
         revision:int,
-        content:@Content[],
+        content:@Content[..],
         effects:@Effect[],
         frame:Rect,
         density:float,
@@ -752,7 +798,7 @@ public class CanvasSurfaceRenderer {
         }
         var formats = effect_output_formats(effects)
         var entry = self.entries[entry_index]
-        let reuse_storage = entry.storage_matches(width, height, formats)
+        let reuse_storage = entry.storage_matches(width, height)
         if reuse_storage {
             entry.release_surface()
         } else {
@@ -767,29 +813,38 @@ public class CanvasSurfaceRenderer {
         entry.text_mode = text_mode
 
         if !reuse_storage {
-            let texture_count = 1 + formats.count()
-            var texture_index = 0
-            while texture_index < texture_count {
-                var format = GPU.TextureFormat.rgba8_unorm
-                if texture_index > 0 { format = formats[texture_index - 1] }
-                entry.textures.append(self.make_texture(
-                    device,
-                    width,
-                    height,
-                    texture_index,
-                    format
-                ))
-                texture_index++
-            }
-            entry.textures.append(self.make_multisample_texture(device, width, height))
+            entry.texture = self.make_texture(
+                device,
+                width,
+                height,
+                0,
+                GPU.TextureFormat.rgba8_unorm
+            )
         }
-        let source_multisample = entry.textures.count() - 1
+        var workspace = self.ensure_workspace(device, width, height, formats)
+        var working:GPU.Texture[] = []
+        for texture in workspace.textures { working.append(texture) }
+        if let output = entry.texture { working.append(output) }
+        if working.is_empty() {
+            panic("GFX.Scene2D CanvasSurface output texture is unavailable")
+        }
 
-        self.content_renderer.begin_prepare(
-                Math.Vec2(width as float / resolved_density,
-                    height as float / resolved_density),
+        let content_viewport = Math.Vec2(
+            width as float / resolved_density,
+            height as float / resolved_density
+        )
+        if var commands = self.frame_commands {
+            self.content_renderer.begin_prepare(
+                content_viewport,
+                resolved_density,
+                commands
+            )
+        } else {
+            self.content_renderer.begin_prepare(
+                content_viewport,
                 resolved_density
             )
+        }
             self.content_renderer.collect_surface_content(
                 device,
                 content,
@@ -802,11 +857,11 @@ public class CanvasSurfaceRenderer {
             self.content_renderer.finish_prepare(device)
             var source_targets:GPU.ColorTarget[] = []
             source_targets.append(GPU.ColorTarget(
-                texture:entry.textures[source_multisample],
+                texture:workspace.multisample,
                 clear:Color.transparent(),
                 load:GPU.Load.clear,
                 store:GPU.Store.resolve,
-                resolve:entry.textures[0],
+                resolve:working[0],
                 cycle:false,
                 cycle_resolve:false
             ))
@@ -822,10 +877,11 @@ public class CanvasSurfaceRenderer {
                 commands.submit()
             }
 
-            self.last_graph_passes += build_effect_graph(effects)
+            let effect_passes = build_effect_graph(effects)
+            self.last_graph_passes += effect_passes
             let final_index = self.apply_effects(
                 device,
-                entry,
+                working,
                 effects,
                 width,
                 height,
@@ -833,7 +889,7 @@ public class CanvasSurfaceRenderer {
             )
             self.current_surface_revision++
             var surface = CanvasSurface(
-                entry.textures[final_index],
+                working[final_index],
                 frame,
                 width,
                 height,
@@ -843,7 +899,21 @@ public class CanvasSurfaceRenderer {
             )
             entry.surface = surface
             self.surface_renders++
+            self.retain_frame_passes(device, 1 + effect_passes)
         return surface
+    }
+
+    // Metal retains substantial encoder state for every render pass until its
+    // command buffer is submitted. Bound the shared surface batch so a frame
+    // with many filtered canvases cannot turn that transient state into a
+    // multi-gigabyte allocation while preserving submission amortization.
+    private func retain_frame_passes(device:@GPU.Device, count:int) {
+        if self.frame_commands == null { return }
+        self.frame_render_passes += count
+        if self.frame_render_passes < 16 { return }
+        if var commands = self.frame_commands { commands.submit() }
+        self.frame_commands = device.commands()
+        self.frame_render_passes = 0
     }
 
     private func require_initialized(device:@GPU.Device) {
@@ -965,7 +1035,7 @@ public class CanvasSurfaceRenderer {
 
     private func prepare_nested(
         device:@GPU.Device,
-        content:@Content[],
+        content:@Content[..],
         density:float,
         text_mode:TextMode
     ) {
@@ -973,7 +1043,7 @@ public class CanvasSurfaceRenderer {
             match item {
                 layer(value) => {
                     if value.effects().is_empty() {
-                        var nested = value.content()
+                        let nested = value.content_view()
                         self.prepare_nested(device, nested, density, text_mode)
                     } else {
                         var prepared = self.render_layer(
@@ -991,7 +1061,7 @@ public class CanvasSurfaceRenderer {
 
     private func apply_effects(
         device:@GPU.Device,
-        entry:SurfaceCacheEntry,
+        textures:GPU.Texture[],
         effects:@Effect[],
         width:int,
         height:int,
@@ -1003,18 +1073,18 @@ public class CanvasSurfaceRenderer {
             match effect.value() {
                 blur(value) => {
                     let radius = value.radius * density
-                    self.effect_pass(device, entry.textures[current], entry.textures[current],
-                        entry.textures[next], width, height,
+                    self.effect_pass(device, textures[current], textures[current],
+                        textures[next], width, height,
                         Packing.canvas_effect_uniform(width, height, Math.Vec2(1.0, 0.0), radius, 1.0))
                     current = next; next++
-                    self.effect_pass(device, entry.textures[current], entry.textures[current],
-                        entry.textures[next], width, height,
+                    self.effect_pass(device, textures[current], textures[current],
+                        textures[next], width, height,
                         Packing.canvas_effect_uniform(width, height, Math.Vec2(0.0, 1.0), radius, 1.0))
                     current = next; next++
                 }
                 opacity(value) => {
-                    self.effect_pass(device, entry.textures[current], entry.textures[current],
-                        entry.textures[next], width, height,
+                    self.effect_pass(device, textures[current], textures[current],
+                        textures[next], width, height,
                         Packing.canvas_effect_uniform(width, height, Math.Vec2(), 0.0, 0.0,
                             opacity:value.value))
                     current = next; next++
@@ -1022,17 +1092,17 @@ public class CanvasSurfaceRenderer {
                 shadow(value) => {
                     let source = current
                     let radius = value.radius * density
-                    self.effect_pass(device, entry.textures[source], entry.textures[source],
-                        entry.textures[next], width, height,
+                    self.effect_pass(device, textures[source], textures[source],
+                        textures[next], width, height,
                         Packing.canvas_effect_uniform(width, height, Math.Vec2(1.0, 0.0), radius, 1.0))
                     current = next; next++
-                    self.effect_pass(device, entry.textures[current], entry.textures[current],
-                        entry.textures[next], width, height,
+                    self.effect_pass(device, textures[current], textures[current],
+                        textures[next], width, height,
                         Packing.canvas_effect_uniform(width, height, Math.Vec2(0.0, 1.0), radius, 1.0))
                     let blurred = next
                     current = next; next++
-                    self.effect_pass(device, entry.textures[source], entry.textures[blurred],
-                        entry.textures[next], width, height,
+                    self.effect_pass(device, textures[source], textures[blurred],
+                        textures[next], width, height,
                         Packing.canvas_effect_uniform(width, height, Math.Vec2(), 0.0, 2.0,
                             offset:value.offset.multiply(density), shadow:value.color))
                     current = next; next++
@@ -1108,6 +1178,53 @@ public class CanvasSurfaceRenderer {
         pass.fragment_sampler(1, auxiliary, sampler)
         pass.draw(3)
         pass.finish()
+    }
+
+    private func ensure_workspace(
+        device:@GPU.Device,
+        width:int,
+        height:int,
+        formats:@GPU.TextureFormat[]
+    ) SurfaceWorkspace {
+        var known = 0
+        while known < self.workspaces.count() {
+            if self.workspaces[known].matches(width, height, formats) {
+                return self.workspaces[known]
+            }
+            known++
+        }
+        var retained_formats:GPU.TextureFormat[] = []
+        for format in formats { retained_formats.append(format) }
+        var textures:GPU.Texture[] = []
+        var index = 0
+        while index < formats.count() {
+            var format = GPU.TextureFormat.rgba8_unorm
+            if index > 0 { format = formats[index - 1] }
+            textures.append(self.make_texture(
+                device,
+                width,
+                height,
+                index + 1,
+                format
+            ))
+            index++
+        }
+        var created = SurfaceWorkspace(
+            width,
+            height,
+            retained_formats,
+            textures,
+            self.make_multisample_texture(device, width, height)
+        )
+        if self.workspaces.count() < 16 {
+            self.workspaces.append(created)
+            return created
+        }
+        let replacement = self.workspace_eviction_cursor
+        self.resident_texture_bytes -= self.workspaces[replacement].byte_count()
+        self.workspaces[replacement] = created
+        self.workspace_eviction_cursor = (replacement + 1) % self.workspaces.count()
+        return created
     }
 
     private func make_texture(

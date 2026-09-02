@@ -136,6 +136,7 @@ public struct Canvas {
     }
     module func geometry() Mesh { return self.retained.geometry() }
     module func content() Content[] { return self.retained.content() }
+    package func content_view() @Content[..] { return self.retained.content_view() }
     module func has_text() bool { return self.retained.has_text() }
     module func text_layers() TextLayer[] { return self.retained.text_layers() }
     module func authored_id() int { return self.authored.id() }
