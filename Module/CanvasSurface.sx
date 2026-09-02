@@ -657,6 +657,9 @@ public class CanvasSurfaceRenderer {
     func content_geometry_cache_count() int {
         return self.content_renderer.drawing_cache_count()
     }
+    func content_geometry_upload_count() int {
+        return self.content_renderer.geometry_refresh_count()
+    }
     func content_image_cache_count() int {
         return self.content_renderer.image_cache_count()
     }

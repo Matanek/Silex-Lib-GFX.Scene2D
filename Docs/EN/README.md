@@ -265,6 +265,8 @@ counted after eviction. A new revision replaces the obsolete entry for the
 same group even when its bounds changed. Text counters distinguish vector tessellation, R8
 glyph rasterization, and uploaded alpha pixels from `rgba_upload_count()`,
 which remains zero on this path.
+`content_geometry_upload_count()` separately counts content-renderer mesh
+transfers so mutation workloads can verify that they remain proportional.
 
 `render_exact` instead preserves the supplied density and guarantees
 `ceil(frame * density)` dimensions. Fixed-resolution consumers such as

@@ -278,6 +278,9 @@ révision remplace l’entrée obsolète du même groupe, même lorsque ses born
 changé. Les compteurs texte séparent tessellation
 vectorielle, rasterisation de glyphes R8 et pixels alpha uploadés de
 `rgba_upload_count()`, qui reste nul sur ce chemin.
+`content_geometry_upload_count()` compte séparément les transferts de meshes
+du renderer de contenu et permet de vérifier leur proportionnalité lors d’une
+mutation.
 
 `render_exact` conserve au contraire la densité fournie et garantit des
 dimensions `ceil(frame * density)`. Cette variante sert aux consommateurs à
