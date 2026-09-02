@@ -185,6 +185,72 @@ benchmarks [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/bl
 et [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 gardent respectivement les parcours texte et géométrie/ECS.
 
+## Produire une surface Canvas filtrée
+
+`CanvasSurfaceRenderer` rend un snapshot Canvas dans une texture GPU bornée,
+échantillonnable par un autre pipeline. Le service appartient au `GPU.Device`
+fourni à sa construction. `CanvasSurface` conserve fortement le résultat et
+expose seulement `texture()`, un emprunt en lecture seule ; aucun handle natif
+ni cache interne de Scene2D ne traverse l’API.
+
+```sx
+use GFX.Canvas
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+var device = GPU.Device()
+var surfaces = Scene2D.CanvasSurfaceRenderer(device)
+var snapshot = drawing.snapshot(320, 180)
+var surface = surfaces.render(
+    snapshot,
+    Canvas.Rect(Math.Vec2(), Math.Vec2(320.0, 180.0)),
+    2.0,
+    Scene2D.CanvasTextMode.automatic
+)
+
+pass.fragment_sampler(0, surface.texture(), sampler)
+```
+
+La texture publiée est RGBA linéaire prémultipliée. `bounds()`, `width()`,
+`height()` et `density()` relient son repère Canvas logique à ses texels. Le
+renderer source emploie un MSAA 4× borné, résout la couleur, puis applique les
+flous séparables, opacités et ombres dans des cibles RGBA16F intermédiaires ;
+la dernière cible revient en RGBA8 échantillonnable. Chemins concaves, texte
+vectoriel, glyphes hintés de l’atlas R8, images et groupes imbriqués suivent le
+même ordre d’auteur. Aucun texte SDL_ttf ni transfert RGBA de ligne n’est
+réintroduit.
+
+Le cache distingue identité et révision du contenu, frame logique, mode texte
+et classe de densité arrondie au quart supérieur. Un placement rigide réutilise
+donc la surface locale ; franchir une classe de densité, muter le contenu ou
+remplacer une ressource concernée recrée seulement les entrées nécessaires.
+`render_count()`, `cache_hit_count()`, `graph_pass_count()`,
+`texture_allocation_count()` et `texture_byte_count()` mesurent ce travail et
+la mémoire actuellement résidente dans le cache ; une surface encore conservée
+par un consommateur n’y est pas comptée après son éviction. Une nouvelle
+révision remplace l’entrée obsolète du même groupe, même lorsque ses bornes ont
+changé. Les compteurs texte séparent tessellation
+vectorielle, rasterisation de glyphes R8 et pixels alpha uploadés de
+`rgba_upload_count()`, qui reste nul sur ce chemin.
+
+Une surface reste attachée à son device. `invalidate()` libère la résidence du
+cache et invalide immédiatement toutes les surfaces de cette génération ; une
+texture encore possédée par une ancienne surface est libérée avec celle-ci,
+mais n’est plus empruntable. `replace_device()` effectue cette invalidation
+avant d’adopter le nouveau device. La requête
+suivante publie une révision et une génération de device nouvelles. Une frame
+ou densité non finie, une dimension nulle, l’absence de RGBA8/MSAA 4× ou de
+RGBA16F échantillonnable, ainsi qu’une cible dépassant 16 384 texels sur un axe
+échouent explicitement. Scene2D ne masque jamais ces cas par une rasterisation
+CPU pleine fenêtre.
+
+Le coût dépend de l’aire en texels, du MSAA source, du nombre de passes et du
+rayon de filtre. Les grands groupes dynamiques et les effets plein écran sont
+donc sensiblement plus coûteux que les petites surfaces statiques réutilisées.
+Cette API ne fournit pas de flou d’arrière-plan : un tel effet exige une
+dépendance distincte sur le contenu déjà rendu.
+
 ## Étendre le renderer
 
 `Plugins.Scene2D` installe ses dépendances ECS, assets et rendu puis enregistre
@@ -210,10 +276,11 @@ application
 Un Bundle autonome peut aussi installer `Plugins.Scene2D()` directement ; il
 possède alors sa fenêtre et sa pile de rendu si elles ne viennent pas du parent.
 
-Les shaders `Drawing.hlsl`, `AnalyticShadow.hlsl`, `ImageDrawing.hlsl`,
-`Grid.hlsl` et `Sprite.hlsl` appartiennent à ce package. Ils ne constituent pas
-une API obligatoire ; une extension peut lire les données publiques de scène et
-fournir son propre `GPU.ShaderProgram.hlsl`.
+Les shaders `Drawing.hlsl`, `AnalyticShadow.hlsl`, `CanvasEffect.hlsl`,
+`CoverageGlyph.hlsl`, `ImageDrawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl`
+appartiennent à ce package. Ils ne constituent pas une API obligatoire ; une
+extension peut lire les données publiques de scène et fournir son propre
+`GPU.ShaderProgram.hlsl`.
 
 La démonstration visuelle [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 appartient à Silex-Examples.

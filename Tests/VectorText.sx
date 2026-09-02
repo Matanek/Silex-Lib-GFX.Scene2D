@@ -398,7 +398,7 @@ func verify_retained_churn(
         probe.stable_glyph_slots = renderer.coverage_glyph_slot_count()
         probe.stable_drawing_cache = renderer.drawing_cache_count()
         assert(probe.stable_glyph_slots > 0)
-        assert(probe.stable_drawing_cache > 0)
+        assert(probe.stable_drawing_cache == 0)
     }
     if probe.frames > 0 && probe.frames % 64 == 0 {
         print(
@@ -427,7 +427,7 @@ func verify_retained_churn(
         assert(renderer.coverage_glyph_slot_count() == probe.stable_glyph_slots)
         assert(renderer.coverage_atlas_page_count() == 1)
         assert(renderer.drawing_cache_count() == probe.stable_drawing_cache)
-        assert(renderer.drawing_snapshot_count() == 1)
+        assert(renderer.drawing_snapshot_count() == 0)
         assert(renderer.coverage_glyph_draw_count() <= renderer.coverage_atlas_page_count())
         controller.stop()
         return

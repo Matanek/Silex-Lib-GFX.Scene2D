@@ -220,6 +220,40 @@ func scene_sprite_uniform(
     return bytes
 }
 
+func canvas_effect_uniform(
+    width:int,
+    height:int,
+    direction:Math.Vec2,
+    radius:float,
+    mode:float,
+    offset:Math.Vec2 = Math.Vec2(),
+    opacity:float = 1.0,
+    shadow:Color = Color.transparent()
+) str {
+    var bytes = storage(64)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_vec4(address, 0, Math.Vec4(
+        1.0 / width as float,
+        1.0 / height as float,
+        width as float,
+        height as float
+    ))
+    write_vec4(address, 16, Math.Vec4(
+        direction.x,
+        direction.y,
+        radius,
+        mode
+    ))
+    write_vec4(address, 32, Math.Vec4(
+        offset.x,
+        offset.y,
+        opacity,
+        0.0
+    ))
+    write_color(address, 48, shadow)
+    return bytes
+}
+
 func quad_vertices() str {
     var bytes = storage(64)
     let address = C.address_bits(C.mutable_string_pointer(bytes))

@@ -71,7 +71,15 @@ int wrapped(int value, int size) {
 }
 
 float4 texel(int2 local) {
-    return imageTexture.Load(int3(int2(sourceRegion.xy) + local, 0));
+    uint width;
+    uint height;
+    imageTexture.GetDimensions(width, height);
+    const float2 coordinate = float2(int2(sourceRegion.xy) + local) + 0.5;
+    return imageTexture.SampleLevel(
+        imageSampler,
+        coordinate / float2(width, height),
+        0.0
+    );
 }
 
 float4 smooth_fit(float2 normalized) {

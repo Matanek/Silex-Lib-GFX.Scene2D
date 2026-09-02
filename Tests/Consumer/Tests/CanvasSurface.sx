@@ -1,0 +1,81 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+test "sample a public CanvasSurface and observe resource recreation" {
+    var device = GPU.Device()
+    var drawing = Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer([Canvas.Effect.blur(4.0)], func(layer:&Canvas.Painter) {
+            layer.fill(
+                Canvas.Circle(Math.Vec2(16.0), 8.0),
+                Canvas.Fill.solid(Color.indigo_500())
+            )
+        })
+    })
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var snapshot = drawing.snapshot(32, 32)
+    var surface = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(32.0)),
+        1.0
+    )
+
+    var targets:GPU.ColorTargetFormat[] = []
+    targets.append(GPU.ColorTargetFormat(format:GPU.TextureFormat.rgba8_unorm))
+    var pipeline = device.graphics_pipeline(
+        GPU.ShaderProgram.hlsl(file:"Shaders/CanvasSurfaceSample.hlsl"),
+        GPU.GraphicsPipelineSettings(
+            color_targets:targets,
+            name:"External CanvasSurface sampling test"
+        )
+    )
+    var sampler = device.sampler(GPU.SamplerSettings(
+        min_filter:GPU.Filter.linear,
+        mag_filter:GPU.Filter.linear,
+        address_u:GPU.AddressMode.clamp_to_edge,
+        address_v:GPU.AddressMode.clamp_to_edge
+    ))
+    var target = device.texture(GPU.TextureSettings(
+        format:GPU.TextureFormat.rgba8_unorm,
+        width:32,
+        height:32,
+        usage:GPU.TextureUsage.as_color_target()
+    ))
+    var download = device.download_buffer(32 * 32 * 4)
+    var commands = device.commands()
+    var pass = commands.render(GPU.ColorTarget(
+        texture:target,
+        clear:Color.transparent(),
+        load:GPU.Load.clear,
+        store:GPU.Store.preserve
+    ))
+    pass.bind(pipeline)
+    pass.fragment_sampler(0, surface.texture(), sampler)
+    pass.draw(3)
+    pass.finish()
+    var transfer = commands.copy()
+    transfer.download(
+        GPU.TextureRegion(texture:target, width:32, height:32),
+        download,
+        32,
+        32
+    )
+    transfer.finish()
+    var completed = commands.submit_and_track()
+    completed.wait()
+    let pixels = download.read()
+    assert(pixels[(16 * 32 + 16) * 4 + 3] > 0 as uint8)
+
+    let revision = surface.revision()
+    renderer.invalidate()
+    assert(!surface.is_valid())
+    var recreated = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(32.0)),
+        1.0
+    )
+    assert(recreated.revision() > revision)
+    assert(recreated.device_generation() > surface.device_generation())
+}
