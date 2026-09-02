@@ -1,10 +1,13 @@
 use GFX.Color
 use GFX.Canvas.Canvas as AuthoredCanvas
 use GFX.Canvas.Geometry.Mesh
+use GFX.Canvas.Shapes.Rect
 use GFX.Canvas.Prepared
+use GFX.Canvas.Content
 use GFX.Canvas.Snapshot
 use GFX.Canvas.TextLayer
 use GFX.Scene2D.Transform
+use GFX.Scene2D.CanvasFilter.CanvasFilter
 use STD.Math
 
 public enum Space {
@@ -48,6 +51,7 @@ public struct Canvas {
     var visible:bool
     var text_mode:TextMode
     var coverage_density:float
+    var filter:CanvasFilter? = null
 
     init(drawing:AuthoredCanvas, width:int, height:int) {
         if width <= 0 || height <= 0 {
@@ -72,6 +76,7 @@ public struct Canvas {
         self.visible = true
         self.text_mode = TextMode.coverage
         self.coverage_density = 1.0
+        self.filter = null
     }
 
     init(drawing:AuthoredCanvas) {
@@ -94,6 +99,7 @@ public struct Canvas {
         self.visible = true
         self.text_mode = TextMode.coverage
         self.coverage_density = 1.0
+        self.filter = null
     }
 
     func replace(drawing:AuthoredCanvas) {
@@ -125,9 +131,24 @@ public struct Canvas {
     func is_framed() bool { return self.framed }
     module func prepared_revision() int { return -self.retained.revision() }
     module func geometry_revision() int { return self.retained.geometry_revision() }
+    module func vector_geometry_compatible() bool {
+        return self.retained.vector_geometry_compatible()
+    }
     module func geometry() Mesh { return self.retained.geometry() }
+    module func content() Content[] { return self.retained.content() }
     module func has_text() bool { return self.retained.has_text() }
     module func text_layers() TextLayer[] { return self.retained.text_layers() }
+    module func authored_id() int { return self.authored.id() }
+    module func authored_snapshot() Snapshot { return self.snapshot() }
+    module func filter_frame() Rect? {
+        if self.framed {
+            return Rect(
+                Math.Vec2(),
+                Math.Vec2(self.drawing_width as float, self.drawing_height as float)
+            )
+        }
+        return self.authored.bounds()
+    }
     module func uses_viewport() bool { return self.space == Space.viewport }
     module func is_detached() bool { return self.authored_revision < 0 }
 

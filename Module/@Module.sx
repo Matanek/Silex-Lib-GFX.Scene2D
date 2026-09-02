@@ -2,6 +2,11 @@ public use GFX.Scene2D.Camera.Camera
 public use GFX.Scene2D.Canvas.Canvas
 public use GFX.Scene2D.Canvas.Space as CanvasSpace
 public use GFX.Scene2D.Canvas.TextMode as CanvasTextMode
+public use GFX.Scene2D.CanvasFilter.CanvasFilter
+public use GFX.Scene2D.CanvasFilter.CanvasFilterABI
+public use GFX.Scene2D.CanvasFilter.CanvasFilterCompatibility
+public use GFX.Scene2D.CanvasSurface.CanvasSurface
+public use GFX.Scene2D.CanvasSurface.CanvasSurfaceRenderer
 public use GFX.Scene2D.Grid.Grid
 public use GFX.Scene2D.Plugin.Plugin
 public use GFX.Scene2D.Sampling.Sampling

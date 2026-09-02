@@ -1,0 +1,470 @@
+use GFX.Assets.Image
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+func filtered_rectangle() Canvas.Canvas {
+    return Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.blur(4.0), Canvas.Effect.opacity(0.8)],
+            func(layer:&Canvas.Painter) {
+                layer.fill(
+                    Canvas.Rect(Math.Vec2(16.0, 18.0), Math.Vec2(24.0, 20.0)),
+                    Canvas.Fill.solid(Color(r:0.2, g:0.6, b:0.9, a:0.75))
+                )
+            }
+        )
+    })
+}
+
+func download_surface(
+    device:@GPU.Device,
+    surface:@Scene2D.CanvasSurface
+) uint8[] {
+    let byte_count = surface.width() * surface.height() * 4
+    var download = device.download_buffer(byte_count)
+    var commands = device.commands()
+    var transfer = commands.copy()
+    transfer.download(
+        GPU.TextureRegion(
+            texture:surface.retained_texture(),
+            width:surface.width(),
+            height:surface.height()
+        ),
+        download,
+        surface.width(),
+        surface.height()
+    )
+    transfer.finish()
+    var completed = commands.submit_and_track()
+    completed.wait()
+    return download.read()
+}
+
+func premultiplied_channel(pixels:@uint8[], index:int, channel:int) int {
+    let alpha = pixels[index + 3] as int
+    if channel == 3 { return alpha }
+    return Math.round(pixels[index + channel] as float * alpha as float / 255.0) as int
+}
+
+func require_software_tolerance(
+    device:@GPU.Device,
+    drawing:@Canvas.Canvas,
+    surface:@Scene2D.CanvasSurface
+) {
+    let actual = download_surface(device, surface)
+    let expected = drawing.rasterize(surface.width(), surface.height()).pixels()
+    var maximum = 0
+    var squared = 0.0
+    var samples = 0
+    var pixel = 0
+    while pixel < expected.count() {
+        var channel = 0
+        while channel < 4 {
+            let reference = premultiplied_channel(expected, pixel, channel)
+            var difference = actual[pixel + channel] as int - reference
+            if difference < 0 { difference = -difference }
+            if difference > maximum { maximum = difference }
+            squared += difference as float * difference as float
+            samples++
+            channel++
+        }
+        pixel += 4
+    }
+    let rmse = Math.sqrt(squared / samples as float)
+    assert(maximum <= 3)
+    assert(rmse <= 1.0)
+}
+
+func require_pixel_tolerance(
+    actual:@uint8[],
+    expected:@uint8[],
+    width:int,
+    x:int,
+    y:int
+) {
+    let pixel = (y * width + x) * 4
+    var channel = 0
+    while channel < 4 {
+        let reference = premultiplied_channel(expected, pixel, channel)
+        var difference = actual[pixel + channel] as int - reference
+        if difference < 0 { difference = -difference }
+        assert(difference <= 3)
+        channel++
+    }
+}
+
+func mixed_filtered_content() Canvas.Canvas {
+    var paint = Canvas.ImagePaint(Image.rgba8(2, 2, [
+        240, 90, 40, 255, 40, 180, 240, 255,
+        80, 220, 120, 255, 245, 210, 60, 255
+    ]))
+    return Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.blur(32.0)],
+            func(layer:&Canvas.Painter) {
+                var path = Canvas.Path()
+                    ..move_to(Math.Vec2(8.0, 8.0))
+                    ..line_to(Math.Vec2(32.0, 8.0))
+                    ..line_to(Math.Vec2(32.0, 16.0))
+                    ..line_to(Math.Vec2(20.0, 16.0))
+                    ..line_to(Math.Vec2(20.0, 28.0))
+                    ..line_to(Math.Vec2(8.0, 28.0))
+                    ..close()
+                layer.fill(path, Canvas.Fill.solid(Color.indigo_400()))
+                layer.text(
+                    "office O",
+                    Math.Vec2(38.0, 6.0),
+                    Canvas.TextStyle(size:14.0, color:Color.white())
+                )
+                layer.fill(
+                    Canvas.Rect(Math.Vec2(40.0, 22.0), Math.Vec2(24.0, 14.0), 2.0),
+                    Canvas.Fill.image(
+                        paint,
+                        Canvas.ImageMapping.fit(
+                            frame:Canvas.Rect(Math.Vec2(40.0, 22.0), Math.Vec2(24.0, 14.0)),
+                            mode:Canvas.ImageFit.cover,
+                            sampling:Canvas.ImageSampling.smooth
+                        )
+                    )
+                )
+                layer.layer([Canvas.Effect.opacity(0.65)], func(nested:&Canvas.Painter) {
+                    nested.fill(
+                        Canvas.Circle(Math.Vec2(76.0, 21.0), 10.0),
+                        Canvas.Fill.solid(Color.cyan_300())
+                    )
+                })
+            }
+        )
+    })
+}
+
+func image_content() Canvas.Canvas {
+    var paint = Canvas.ImagePaint(Image.rgba8(2, 2, [
+        240, 90, 40, 255, 40, 180, 240, 255,
+        80, 220, 120, 255, 245, 210, 60, 255
+    ]))
+    return Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(8.0), Math.Vec2(24.0, 16.0)),
+            Canvas.Fill.image(
+                paint,
+                Canvas.ImageMapping.fit(
+                    frame:Canvas.Rect(Math.Vec2(8.0), Math.Vec2(24.0, 16.0)),
+                    mode:Canvas.ImageFit.cover,
+                    sampling:Canvas.ImageSampling.smooth
+                )
+            )
+        )
+    })
+}
+
+func negative_shadowed_text() Canvas.Canvas {
+    return Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.shadow(Math.Vec2(5.0, 3.0), 6.0, Color(r:0.0, g:0.0, b:0.0, a:0.65))],
+            func(layer:&Canvas.Painter) {
+                layer.text(
+                    "office O",
+                    Math.Vec2(-4.0, -3.0),
+                    Canvas.TextStyle(size:18.0, color:Color.amber_300())
+                )
+            }
+        )
+    })
+}
+
+func ordered_filtered_group() Canvas.Canvas {
+    return Canvas.Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(4.0), Math.Vec2(38.0, 30.0)),
+            Canvas.Fill.solid(Color.rose_500())
+        )
+        painter.layer([Canvas.Effect.blur(5.0)], func(layer:&Canvas.Painter) {
+            layer.fill(
+                Canvas.Circle(Math.Vec2(34.0, 26.0), 14.0),
+                Canvas.Fill.solid(Color.cyan_300().with_alpha(0.8))
+            )
+        })
+        painter.fill(
+            Canvas.Rect(Math.Vec2(26.0, 20.0), Math.Vec2(30.0, 28.0)),
+            Canvas.Fill.solid(Color.amber_300())
+        )
+    })
+}
+
+test "publish a bounded premultiplied GPU surface within the software tolerance" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = filtered_rectangle()
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(64.0))
+    var snapshot = drawing.snapshot(64, 64)
+    var surface = renderer.render(snapshot, frame, 1.0)
+
+    assert(surface.bounds().position == Math.Vec2())
+    assert(surface.bounds().size == Math.Vec2(64.0))
+    assert(surface.width() == 64)
+    assert(surface.height() == 64)
+    assert(surface.density() == 1.0)
+    assert(surface.is_premultiplied())
+    assert(surface.color_space() == GPU.ColorSpace.linear)
+    assert(surface.texture().usage().sampled)
+    assert(renderer.rgba_upload_count() == 0)
+    assert(renderer.graph_pass_count() == 7)
+
+    require_software_tolerance(device, drawing, surface)
+}
+
+test "preserve an exact fixed density for external surface consumers" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = filtered_rectangle()
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(63.0, 37.0))
+    var snapshot = drawing.snapshot(63, 37)
+    var first = renderer.render_exact(snapshot, frame, 1.37)
+    var reused = renderer.render_exact(snapshot, frame, 1.37)
+
+    assert(first.width() == 87)
+    assert(first.height() == 51)
+    assert(first.density() == 1.37)
+    assert(reused.revision() == first.revision())
+    assert(renderer.render_count() == 2)
+    assert(renderer.cache_hit_count() >= 1)
+}
+
+test "filter mixed content in every text mode without RGBA uploads" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = mixed_filtered_content()
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(96.0, 48.0))
+    var snapshot = drawing.snapshot(96, 48)
+    var vector = renderer.render(snapshot, frame, 1.0, Scene2D.CanvasTextMode.vector)
+    let vector_graph_passes = renderer.graph_pass_count()
+    assert(renderer.vector_tessellation_count() > 0)
+    var coverage = renderer.render(snapshot, frame, 1.0, Scene2D.CanvasTextMode.coverage)
+    assert(renderer.coverage_raster_count() > 0)
+    assert(renderer.coverage_uploaded_pixel_count() > 0)
+    assert(renderer.coverage_glyph_slot_count() > 0)
+    let warm_rasters = renderer.coverage_raster_count()
+    let warm_pixels = renderer.coverage_uploaded_pixel_count()
+    var automatic = renderer.render(snapshot, frame, 1.0, Scene2D.CanvasTextMode.automatic)
+    var warm_coverage = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(-1.0), Math.Vec2(96.0, 48.0)),
+        1.0,
+        Scene2D.CanvasTextMode.coverage
+    )
+
+    assert(vector.is_valid())
+    assert(coverage.is_valid())
+    assert(automatic.is_valid())
+    assert(warm_coverage.is_valid())
+    assert(renderer.coverage_raster_count() == warm_rasters)
+    assert(renderer.coverage_uploaded_pixel_count() == warm_pixels)
+    assert(renderer.rgba_upload_count() == 0)
+    assert(vector_graph_passes == 9)
+    assert(renderer.graph_pass_count() == 2)
+    require_software_tolerance(device, drawing, vector)
+    require_software_tolerance(device, drawing, coverage)
+    require_software_tolerance(device, drawing, automatic)
+}
+
+test "render image content into a bounded surface" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = image_content()
+    var snapshot = drawing.snapshot(48, 40)
+    var surface = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(48.0, 40.0)),
+        1.0
+    )
+    require_software_tolerance(device, drawing, surface)
+}
+
+test "preserve author order before inside and after a filtered group" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = ordered_filtered_group()
+    var snapshot = drawing.snapshot(64, 56)
+    var surface = renderer.render(
+        snapshot,
+        Canvas.Rect(Math.Vec2(), Math.Vec2(64.0, 56.0)),
+        1.0
+    )
+    let actual = download_surface(device, surface)
+    let expected = drawing.rasterize(surface.width(), surface.height()).pixels()
+    require_pixel_tolerance(actual, expected, surface.width(), 8, 8)
+    require_pixel_tolerance(actual, expected, surface.width(), 24, 26)
+    require_pixel_tolerance(actual, expected, surface.width(), 40, 24)
+}
+
+test "keep a negative-origin text shadow inside its bounded target" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = negative_shadowed_text()
+    var snapshot = drawing.snapshot(104, 48)
+    let frame = Canvas.Rect(Math.Vec2(-16.0, -14.0), Math.Vec2(128.0, 72.0))
+    var vector = renderer.render(snapshot, frame, 1.0, Scene2D.CanvasTextMode.vector)
+    var coverage = renderer.render(snapshot, frame, 1.0, Scene2D.CanvasTextMode.coverage)
+    var automatic = renderer.render(snapshot, frame, 1.0, Scene2D.CanvasTextMode.automatic)
+
+    assert(vector.width() == 128)
+    assert(vector.height() == 72)
+    assert(coverage.is_valid())
+    assert(automatic.is_valid())
+    assert(renderer.rgba_upload_count() == 0)
+    let pixels = download_surface(device, coverage)
+    var minimum_x = coverage.width()
+    var minimum_y = coverage.height()
+    var maximum_x = -1
+    var maximum_y = -1
+    var pixel = 0
+    while pixel < pixels.count() {
+        if pixels[pixel + 3] > 0 as uint8 {
+            let index = pixel / 4
+            let x = index % coverage.width()
+            let y = index / coverage.width()
+            if x < minimum_x { minimum_x = x }
+            if y < minimum_y { minimum_y = y }
+            if x > maximum_x { maximum_x = x }
+            if y > maximum_y { maximum_y = y }
+        }
+        pixel += 4
+    }
+    assert(minimum_x > 0)
+    assert(minimum_y > 0)
+    assert(maximum_x < coverage.width() - 1)
+    assert(maximum_y < coverage.height() - 1)
+}
+
+test "reuse static surfaces and recreate them after explicit invalidation" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = filtered_rectangle()
+    let frame = Canvas.Rect(Math.Vec2(-4.0), Math.Vec2(72.0))
+    var snapshot = drawing.snapshot(64, 64)
+    var first = renderer.render(snapshot, frame, 1.4)
+    let allocations = renderer.texture_allocation_count()
+    let resident_bytes = renderer.texture_byte_count()
+    assert(resident_bytes >= first.texture().byte_count())
+    var reused = renderer.render(snapshot, frame, 1.4)
+    var same_density_class = renderer.render(snapshot, frame, 1.49)
+    assert(reused.revision() == first.revision())
+    assert(same_density_class.revision() == first.revision())
+    assert(renderer.render_count() == 2)
+    assert(renderer.cache_hit_count() == 3)
+    assert(renderer.texture_allocation_count() == allocations)
+    assert(renderer.texture_byte_count() == resident_bytes)
+    assert(first.width() == 108)
+    assert(first.height() == 108)
+    var denser = renderer.render(snapshot, frame, 1.51)
+    assert(denser.width() == 126)
+    assert(denser.height() == 126)
+    assert(denser.revision() > first.revision())
+    assert(renderer.texture_allocation_count() > allocations)
+
+    let previous_generation = first.device_generation()
+    renderer.invalidate()
+    assert(!first.is_valid())
+    assert(renderer.texture_byte_count() == 0)
+    var recreated = renderer.render(snapshot, frame, 1.4)
+    assert(recreated.is_valid())
+    assert(recreated.revision() > first.revision())
+    assert(recreated.device_generation() > previous_generation)
+    assert(renderer.rgba_upload_count() == 0)
+
+    var replacement = GPU.Device()
+    renderer.replace_device(replacement)
+    assert(!recreated.is_valid())
+    var replaced = renderer.render(snapshot, frame, 1.4)
+    assert(replaced.is_valid())
+    assert(replaced.device_generation() > recreated.device_generation())
+}
+
+test "invalidate only the mutated root while retaining its filtered child" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = filtered_rectangle()
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(80.0))
+    var first_snapshot = drawing.snapshot(80, 80)
+    var first = renderer.render(first_snapshot, frame, 1.0)
+    assert(renderer.render_count() == 2)
+    let cache_entries = renderer.cache_entry_count()
+    let allocations = renderer.texture_allocation_count()
+    let resident_bytes = renderer.texture_byte_count()
+
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.fill(
+            Canvas.Rect(Math.Vec2(2.0, 60.0), Math.Vec2(12.0, 8.0)),
+            Canvas.Fill.solid(Color.lime_400())
+        )
+    })
+    var changed_snapshot = drawing.snapshot(80, 80)
+    var changed = renderer.render(changed_snapshot, frame, 1.0)
+    assert(changed.revision() > first.revision())
+    assert(renderer.render_count() == 3)
+    assert(renderer.cache_hit_count() == 3)
+    assert(renderer.cache_entry_count() == cache_entries)
+    assert(renderer.texture_allocation_count() == allocations)
+    assert(renderer.texture_byte_count() == resident_bytes)
+    assert(first.is_valid())
+
+    drawing.clear()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.blur(4.0), Canvas.Effect.opacity(0.8)],
+            func(layer:&Canvas.Painter) {
+                layer.fill(
+                    Canvas.Rect(Math.Vec2(34.0, 30.0), Math.Vec2(24.0, 20.0)),
+                    Canvas.Fill.solid(Color(r:0.2, g:0.6, b:0.9, a:0.75))
+                )
+            }
+        )
+    })
+    var moved_snapshot = drawing.snapshot(80, 80, reuse:changed_snapshot)
+    var moved = renderer.render(moved_snapshot, frame, 1.0)
+    assert(moved.revision() > changed.revision())
+    assert(renderer.render_count() == 5)
+    assert(renderer.cache_entry_count() == cache_entries)
+    assert(renderer.texture_allocation_count() == allocations)
+    assert(renderer.texture_byte_count() == resident_bytes)
+    assert(first.is_valid())
+    assert(changed.is_valid())
+}
+
+test "replace one retained vector text cache entry across revisions" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(160.0, 32.0))
+    var drawing = Canvas.Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text("phase 0", Math.Vec2(4.0, 4.0))
+    })
+    var previous = drawing.snapshot(160, 32)
+    var first = renderer.render(
+        previous,
+        frame,
+        1.0,
+        Scene2D.CanvasTextMode.vector
+    )
+    var phase = 1
+    while phase <= 20 {
+        drawing.clear()
+        drawing.paint(func(painter:&Canvas.Painter) {
+            painter.text("phase $(phase)", Math.Vec2(4.0, 4.0))
+        })
+        var current = drawing.snapshot(160, 32, reuse:previous)
+        var surface = renderer.render(
+            current,
+            frame,
+            1.0,
+            Scene2D.CanvasTextMode.vector
+        )
+        previous = current
+        phase++
+    }
+    assert(renderer.content_vector_layer_cache_count() == 1)
+}

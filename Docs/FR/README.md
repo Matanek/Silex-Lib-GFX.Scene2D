@@ -201,6 +201,65 @@ Trois classes de détail stables couvrent le petit texte, le dessin courant et
 le fort agrandissement ; rester dans une classe ne retesselle pas. Une couleur,
 translation, rotation ou échelle ne modifie que l'instance GPU.
 
+## Rendre une ombre analytique
+
+Le renderer intégré possède un chemin GPU direct pour une couche Canvas qui
+contient exactement un effet `Effect.shadow(...)` et exactement une primitive
+analytique : rectangle, rectangle arrondi, cercle ou ligne. L'alpha de sa
+brosse doit être uniforme. Le shader évalue la forme et son flou gaussien dans
+un quad élargi ; il ne crée ni image CPU, ni texture d'effet, ni passe hors
+écran. Translation, rotation et échelle, y compris une échelle non uniforme,
+restent portées par l'instance. Une modification du placement ou des paramètres
+de l'ombre ne reconstruit donc pas la géométrie partagée.
+
+Ce contrat étroit est volontaire. Une couche contenant plusieurs primitives,
+un chemin, une image, une brosse dont l'alpha varie ou du texte n'est pas
+admissible. Cela vaut pour les modes texte vectoriel et coverage de
+`GFX.Font` : le texte reste vectoriel ou rasterisable selon le choix du
+composant, mais son ombre demande le compositeur d'effets général. Tant que ce
+dernier n'est pas installé, Scene2D échoue explicitement avec le diagnostic
+`Canvas filtered layer is not eligible for the analytic shadow path` au lieu
+d'ignorer l'effet.
+
+## Appliquer un filtre de placement Canvas
+
+`CanvasFilter` est une porte de sortie Scene2D appliquée à la texture finale du
+Canvas, après ses effets portables et avant la teinte du placement. Elle force
+donc une isolation GPU bornée ; elle ne remplace pas le shader de géométrie
+analytique. Deux placements qui partagent dessin, filtre et classe de densité
+partagent aussi la source et le résultat filtré, même si translation, rotation
+ou `color` diffèrent.
+
+```sx
+let program = GPU.ShaderProgram.hlsl(file:"Shaders/Heatmap.hlsl")
+var filter = Scene2D.CanvasFilter(program)
+var placement = Scene2D.Canvas(drawing, 320, 180)
+placement.filter = filter
+```
+
+L’ABI `CanvasFilter.v1` impose `vertex_main` et `fragment_main`. Le vertex input
+est `float2 position : POSITION0` puis `float2 uv : TEXCOORD0`; la sortie porte
+`float4 position : SV_Position` et `float2 uv : TEXCOORD0`. Le cbuffer commun
+`b0, space1`, lié aux deux stages, occupe exactement 96 octets :
+`float4x4 clipFromUnit`, puis `logicalOrigin`, `logicalSize`, `pixelSize` et
+`inversePixelSize` en `float2`. La texture RGBA linéaire prémultipliée et son
+sampler linéaire clampé sont `t0/s0, space2`. Le fragment retourne un
+`float4 : SV_Target0` prémultiplié.
+
+Les positions et UV couvrent `[0, 1]²`, origine en haut à gauche. Un centre de
+texel entier `i` vaut `(i + 0.5) * inversePixelSize`. La texture n’a aucun
+padding caché et le filtre conserve ses bornes et dimensions. Le vertex shader
+calcule exactement
+`mul(clipFromUnit, float4(input.position, 0.0, 1.0))` et transmet l’UV.
+
+Un second cbuffer fragment `b1, space1` peut contenir de 16 à 4096 octets, par
+blocs de 16. Passez ces octets au constructeur puis appelez `replace(bytes)` :
+la révision avance et seule la passe de filtre est rejouée. La taille du bloc
+reste fixe. `CanvasFilter.compatibility(program, parameter_size)` permet de
+prévalider entry points et comptes de ressources avec un diagnostic sans créer
+le filtre. Aucune texture supplémentaire, storage resource, profondeur ou état
+de rasterisation personnalisé n’appartient à v1.
+
 ## Comprendre la rétention et les caches
 
 Le composant conserve l'identité du `GFX.Canvas.Canvas` reçu. Si le producteur
@@ -226,6 +285,14 @@ frame animée réécrit ainsi les valeurs du mesh sans reconstruire ses capacit�
 Modifier uniquement un libellé ne transfère ni la géométrie, ni les autres
 couches de texte.
 
+Un `Canvas.ImagePaint` suit le même principe. Scene2D conserve séparément le
+mesh du masque et la texture indexée par l'identité de l'ImagePaint. Une frame
+inchangée ne transfère rien ; `ImagePaint.replace(...)` réenvoie uniquement la
+texture concernée et conserve le buffer du rectangle, cercle ou chemin. Le
+shader applique `fit` ou `tile` dans les coordonnées locales du Canvas, puis
+évalue le masque analytique. Rotation et échelle non uniforme restent ainsi
+des propriétés de l'instance, pas une raison de reconstruire la géométrie.
+
 Les identités de textures de sprites et de textes sont indexées directement ;
 la préparation d’une frame reste linéaire selon les dessins visibles. Le cache
 vectoriel garde au plus 2 048 meshes de glyphes et 256 couches préparées. Après
@@ -243,6 +310,86 @@ texture hors écran pendant le scroll. Les
 benchmarks [UpdatingTextLayers2D](https://github.com/Matanek/Silex-Benchmarks/blob/main/Sources/UpdatingTextLayers2D.sx)
 et [Boids2D](https://github.com/Matanek/Silex-Benchmarks/tree/main/Sources/Boids2D)
 gardent respectivement les parcours texte et géométrie/ECS.
+
+## Produire une surface Canvas filtrée
+
+`CanvasSurfaceRenderer` rend un snapshot Canvas dans une texture GPU bornée,
+échantillonnable par un autre pipeline. Le service appartient au `GPU.Device`
+fourni à sa construction. `CanvasSurface` conserve fortement le résultat et
+expose sa valeur opaque `GPU.Texture` par `texture()` afin de pouvoir construire
+une `GPU.TextureRegion` ou la lier à un sampler ; aucun handle natif ni cache
+interne de Scene2D ne traverse l’API.
+
+```sx
+use GFX.Canvas
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+var device = GPU.Device()
+var surfaces = Scene2D.CanvasSurfaceRenderer(device)
+var snapshot = drawing.snapshot(320, 180)
+var surface = surfaces.render(
+    snapshot,
+    Canvas.Rect(Math.Vec2(), Math.Vec2(320.0, 180.0)),
+    2.0,
+    Scene2D.CanvasTextMode.automatic
+)
+
+pass.fragment_sampler(0, surface.texture(), sampler)
+```
+
+La texture publiée est RGBA linéaire prémultipliée. `bounds()`, `width()`,
+`height()` et `density()` relient son repère Canvas logique à ses texels. Le
+renderer source emploie un MSAA 4× borné, résout la couleur, puis applique les
+flous séparables, opacités et ombres dans des cibles RGBA16F intermédiaires ;
+la dernière cible revient en RGBA8 échantillonnable. Chemins concaves, texte
+vectoriel, glyphes hintés de l’atlas R8, images et groupes imbriqués suivent le
+même ordre d’auteur. Aucun texte SDL_ttf ni transfert RGBA de ligne n’est
+réintroduit.
+
+Le cache distingue identité et révision du contenu, frame logique, mode texte
+et classe de densité arrondie au quart supérieur. Un placement rigide réutilise
+donc la surface locale ; franchir une classe de densité, muter le contenu ou
+remplacer une ressource concernée invalide seulement les entrées nécessaires.
+Lorsque dimensions et formats restent identiques, une nouvelle révision réécrit
+les textures retenues sans nouvelle allocation. Dans le parcours Scene2D, les
+passes source, effets et filtre de toutes les surfaces d’une frame sont aussi
+enregistrées dans un seul command buffer avant soumission ; l’API autonome
+`CanvasSurfaceRenderer.render` conserve sa soumission immédiate.
+`render_count()`, `cache_hit_count()`, `graph_pass_count()`,
+`texture_allocation_count()` et `texture_byte_count()` mesurent ce travail et
+la mémoire actuellement résidente dans le cache ; une surface encore conservée
+par un consommateur n’y est pas comptée après son éviction. Une nouvelle
+révision remplace l’entrée obsolète du même groupe, même lorsque ses bornes ont
+changé. Les compteurs texte séparent tessellation
+vectorielle, rasterisation de glyphes R8 et pixels alpha uploadés de
+`rgba_upload_count()`, qui reste nul sur ce chemin.
+`content_geometry_upload_count()` compte séparément les transferts de meshes
+du renderer de contenu et permet de vérifier leur proportionnalité lors d’une
+mutation.
+
+`render_exact` conserve au contraire la densité fournie et garantit des
+dimensions `ceil(frame * density)`. Cette variante sert aux consommateurs à
+résolution fixe, notamment `Scene3D.CanvasPanel`; `render` garde ses classes au
+quart pour les effets Scene2D adaptatifs.
+
+Une surface reste attachée à son device. `invalidate()` libère la résidence du
+cache et invalide immédiatement toutes les surfaces de cette génération ; une
+texture encore possédée par une ancienne surface est libérée avec celle-ci,
+mais n’est plus empruntable. `replace_device()` effectue cette invalidation
+avant d’adopter le nouveau device. La requête
+suivante publie une révision et une génération de device nouvelles. Une frame
+ou densité non finie, une dimension nulle, l’absence de RGBA8/MSAA 4× ou de
+RGBA16F échantillonnable, ainsi qu’une cible dépassant 16 384 texels sur un axe
+échouent explicitement. Scene2D ne masque jamais ces cas par une rasterisation
+CPU pleine fenêtre.
+
+Le coût dépend de l’aire en texels, du MSAA source, du nombre de passes et du
+rayon de filtre. Les grands groupes dynamiques et les effets plein écran sont
+donc sensiblement plus coûteux que les petites surfaces statiques réutilisées.
+Cette API ne fournit pas de flou d’arrière-plan : un tel effet exige une
+dépendance distincte sur le contenu déjà rendu.
 
 ## Étendre le renderer
 
@@ -269,9 +416,11 @@ application
 Un Bundle autonome peut aussi installer `Plugins.Scene2D()` directement ; il
 possède alors sa fenêtre et sa pile de rendu si elles ne viennent pas du parent.
 
-Les shaders `Drawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl` appartiennent à ce
-package. Ils ne constituent pas une API obligatoire ; une extension peut lire
-les données publiques de scène et fournir son propre `GPU.ShaderProgram.hlsl`.
+Les shaders `Drawing.hlsl`, `AnalyticShadow.hlsl`, `CanvasEffect.hlsl`,
+`CoverageGlyph.hlsl`, `ImageDrawing.hlsl`, `Grid.hlsl` et `Sprite.hlsl`
+appartiennent à ce package. Ils ne constituent pas une API obligatoire ; une
+extension peut lire les données publiques de scène et fournir son propre
+`GPU.ShaderProgram.hlsl`.
 
 La démonstration visuelle [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 appartient à Silex-Examples.

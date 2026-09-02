@@ -166,7 +166,12 @@ func require_bounded_mutable_cache(
 ) {
     if state.updates < 32 { return }
     assert(renderer.drawing_cache_count() <= 2)
-    assert(renderer.image_cache_count() == 1)
+    assert(renderer.image_cache_count() == 0)
+    assert(renderer.coverage_atlas_page_count() == 1)
+    assert(renderer.coverage_glyph_slot_count() <= 16)
+    assert(renderer.coverage_raster_count() ==
+        renderer.coverage_glyph_slot_count())
+    assert(renderer.coverage_instance_allocation_count() <= 4)
     controller.stop()
 }
 
@@ -258,7 +263,7 @@ test "batch interleaved Canvas geometry after layer ordering" {
     assert(application.run() == 0)
 }
 
-test "reuse one GPU geometry cache while a Canvas changes" {
+test "reuse bounded GPU caches while a Canvas changes" {
     var application = Application()
     application.add_resource(MutableCanvasCase())
     application.add_plugin(WindowPlugin(WindowPlugin.Settings()

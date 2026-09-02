@@ -1,0 +1,263 @@
+use GFX.Application
+use GFX.Assets.Image
+use GFX.Canvas
+use GFX.Color
+use GFX.Components
+use GFX.ECS
+use GFX.Rendering
+use GFX.Scene2D
+use GFX.Scene2D.Renderer
+use GFX.Window.Plugin as WindowPlugin
+use STD.Math
+
+func shadowed_rect() Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.shadow(
+                offset:Math.Vec2(3.0, 5.0),
+                radius:8.0,
+                color:Color.black().with_alpha(0.35)
+            )],
+            func(layer:&Canvas.Painter) {
+                layer.fill(
+                    Canvas.Rect(Math.Vec2(8.0), Math.Vec2(32.0, 20.0), 5.0),
+                    Canvas.Fill.solid(Color.indigo_500())
+                )
+            }
+        )
+    })
+}
+
+func shadowed_circle() Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.shadow(Math.Vec2(-2.0, 1.0), 4.0, Color.black())],
+            func(layer:&Canvas.Painter) {
+                layer.fill(
+                    Canvas.Circle(Math.Vec2(16.0), 10.0),
+                    Canvas.Fill.solid(Color.white())
+                )
+            }
+        )
+    })
+}
+
+func shadowed_line() Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.shadow(Math.Vec2(1.0, 2.0), 3.0, Color.black())],
+            func(layer:&Canvas.Painter) {
+                layer.stroke(
+                    Canvas.Line(Math.Vec2(2.0, 4.0), Math.Vec2(28.0, 18.0)),
+                    Canvas.Stroke(Color.white(), 3.0)..cap = Canvas.StrokeCap.round
+                )
+            }
+        )
+    })
+}
+
+func shadowed_text() Canvas {
+    return Canvas()..paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.shadow(Math.Vec2(1.0), 2.0, Color.black())],
+            func(layer:&Canvas.Painter) {
+                layer.text("GFX.Font", Math.Vec2(2.0), Canvas.TextStyle(size:12.0))
+            }
+        )
+    })
+}
+
+test "admit only one analytic primitive with uniform brush alpha" {
+    var rectangle = shadowed_rect().prepared(64, 48).content()
+    var circle = shadowed_circle().prepared(32, 32).content()
+    var line = shadowed_line().prepared(32, 24).content()
+    var text = shadowed_text().prepared(96, 24).content()
+    assert(Renderer.analytic_shadow_eligible(rectangle))
+    assert(Renderer.analytic_shadow_eligible(circle))
+    assert(Renderer.analytic_shadow_eligible(line))
+    assert(!Renderer.analytic_shadow_eligible(text))
+    var vector_text = Components.Canvas(shadowed_text(), 96, 24)
+    vector_text.text_mode = Scene2D.CanvasTextMode.vector
+    var vector_content = vector_text.snapshot().content()
+    assert(!Renderer.analytic_shadow_eligible(vector_content))
+    vector_text.text_mode = Scene2D.CanvasTextMode.coverage
+    var coverage_content = vector_text.snapshot().content()
+    assert(!Renderer.analytic_shadow_eligible(coverage_content))
+
+    var path_drawing = Canvas()
+    path_drawing.paint(func(painter:&Canvas.Painter) {
+        painter.layer(
+            [Canvas.Effect.shadow(Math.Vec2(), 4.0, Color.black())],
+            func(layer:&Canvas.Painter) {
+                var path = Canvas.Path()
+                    ..move_to(Math.Vec2())
+                    ..line_to(Math.Vec2(20.0, 0.0))
+                    ..line_to(Math.Vec2(10.0, 12.0))
+                    ..close()
+                layer.fill(path, Canvas.Fill.solid(Color.white()))
+            }
+        )
+    })
+    var path = path_drawing.prepared(24, 16).content()
+    assert(!Renderer.analytic_shadow_eligible(path))
+
+    var gradient_drawing = Canvas()
+    gradient_drawing.paint(func(painter:&Canvas.Painter) {
+        let brush = Canvas.Brush.linear(
+            start:Math.Vec2(),
+            end:Math.Vec2(24.0, 0.0),
+            start_color:Color.white().with_alpha(0.2),
+            end_color:Color.white().with_alpha(0.8)
+        )
+        painter.layer(
+            [Canvas.Effect.shadow(Math.Vec2(), 4.0, Color.black())],
+            func(layer:&Canvas.Painter) {
+                layer.fill(
+                    Canvas.Rect(Math.Vec2(), Math.Vec2(24.0, 12.0)),
+                    Canvas.Fill.with_brush(brush)
+                )
+            }
+        )
+    })
+    var gradient = gradient_drawing.prepared(24, 12).content()
+    assert(!Renderer.analytic_shadow_eligible(gradient))
+    assert(Renderer.analytic_shadow_diagnostic() ==
+        "GFX.Scene2D Canvas filtered layer is not eligible for the " +
+        "analytic shadow path; the GPU effect compositor is not available")
+}
+
+func alpha_at(image:@Image, x:int, y:int) int {
+    let pixels = image.pixels()
+    return pixels[(y * image.width() + x) * 4 + 3] as int
+}
+
+test "match the portable Gaussian oracle along an analytic edge" {
+    let radii:float[] = [3.0, 6.0, 12.0]
+    for radius in radii {
+        var drawing = Canvas()
+        drawing.paint(func(painter:&Canvas.Painter) {
+            painter.layer(
+                [Canvas.Effect.shadow(
+                    offset:Math.Vec2(2.0, 1.0),
+                    radius:radius,
+                    color:Color.black().with_alpha(0.5)
+                )],
+                func(layer:&Canvas.Painter) {
+                    layer.fill(
+                        Canvas.Rect(Math.Vec2(16.0), Math.Vec2(32.0)),
+                        Canvas.Fill.solid(Color.white())
+                    )
+                }
+            )
+        })
+        let image = drawing.rasterize(96, 64)
+        var distance = 0
+        while distance <= radius as int {
+            let x = 50 + distance
+            let actual = alpha_at(image, x, 33)
+            let edge = x as float + 0.5 - 50.0
+            let expected = Math.round(
+                Renderer.analytic_blurred_coverage(edge, radius) * 0.5 * 255.0
+            ) as int
+            var difference = actual - expected
+            if difference < 0 { difference = -difference }
+            assert(difference <= 3)
+            distance++
+        }
+    }
+}
+
+class ShadowProbe {
+    var frames:int = 0
+    var entity:ECS.Entity? = null
+    var drawing:Canvas = Canvas()
+    var geometry_refreshes:int = 0
+}
+
+func create_shadow_instances(world:&ECS.World, probe:&ShadowProbe) {
+    var drawing = shadowed_rect()
+    probe.drawing = drawing
+    var index = 0
+    while index < 32 {
+        let entity = world.spawn(ECS.EntityRecipe()
+            ..with(Components.Transform2D(
+                position:Math.Vec2((index % 8) as float * 7.0, (index / 8) as float * 9.0),
+                rotation:index as float * 0.01,
+                scale:Math.Vec2(1.0 + index as float * 0.002, 0.75)
+            ))
+            ..with(Components.Canvas(drawing, 64, 48))
+        )
+        if index == 0 { probe.entity = entity }
+        index++
+    }
+}
+
+func verify_shadow_instances(
+    rendering:@Rendering.Renderer,
+    renderer:@Renderer,
+    world:&ECS.World,
+    probe:&ShadowProbe,
+    controller:&Application.Controller
+) {
+    assert(renderer.analytic_shadow_draw_count() == 32)
+    assert(renderer.drawing_cache_count() == 1)
+    assert(renderer.image_cache_count() == 0)
+    assert(renderer.coverage_raster_count() == 0)
+    assert(rendering.stats().draw_calls() == 1)
+    assert(rendering.stats().pipeline_bindings() == 1)
+    assert(rendering.stats().instances() == 32)
+    if probe.frames == 0 {
+        probe.geometry_refreshes = renderer.geometry_refresh_count()
+        assert(probe.geometry_refreshes == 1)
+        if let entity = probe.entity {
+            world.update<Components.Transform2D>(entity, func(transform:&Components.Transform2D) {
+                transform.position = Math.Vec2(11.0, 7.0)
+                transform.rotation = 0.45
+                transform.scale = Math.Vec2(1.7, 0.6)
+            })
+        }
+        probe.frames++
+        return
+    }
+    assert(renderer.geometry_refresh_count() == probe.geometry_refreshes)
+    if probe.frames == 1 {
+        {
+            var drawing = probe.drawing
+            drawing.clear()
+            drawing.paint(func(painter:&Canvas.Painter) {
+                painter.layer(
+                    [Canvas.Effect.shadow(
+                        offset:Math.Vec2(-4.0, 2.0),
+                        radius:12.0,
+                        color:Color.blue_500().with_alpha(0.45)
+                    )],
+                    func(layer:&Canvas.Painter) {
+                        layer.fill(
+                            Canvas.Rect(Math.Vec2(8.0), Math.Vec2(32.0, 20.0), 5.0),
+                            Canvas.Fill.solid(Color.indigo_500())
+                        )
+                    }
+                )
+            })
+        }
+        probe.frames++
+        return
+    }
+    controller.stop()
+}
+
+test "batch analytic shadows without texture or geometry rebuild" {
+    var application = Application()
+    application.add_resource(ShadowProbe())
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D analytic Canvas shadows"
+        ..width = 96
+        ..height = 64
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_shadow_instances)
+    application.add_after_system(Application.Schedule.render, verify_shadow_instances)
+    assert(application.run() == 0)
+}
