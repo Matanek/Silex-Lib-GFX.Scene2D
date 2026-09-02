@@ -2,6 +2,8 @@ use GFX.Application
 use GFX.Canvas
 use GFX.Color
 use GFX.ECS
+use GFX.Plugins
+use GFX.Resources
 use GFX.Scene2D
 use GFX.Scene2D.Renderer
 use GFX.Window.Plugin as WindowPlugin
@@ -131,6 +133,46 @@ test "install Scene2D directly inside an Application Bundle" {
         ..add_after_system(Application.Schedule.render, inspect_direct_canvas)
 
     application.add_plugin(Application.BundleManager(bundle))
+    assert(application.run() == 0)
+    assert(bundle.is_finalized())
+}
+
+func inspect_bundle_camera(
+    camera:@Resources.ViewportCamera2D,
+    cameras:ECS.Query<(@Scene2D.Transform, @Scene2D.Camera)>,
+    controller:&Application.Controller
+) {
+    var count = 0
+    for (transform, component) in cameras {
+        assert(component.is_active())
+        assert(transform.position.x == camera.position().x)
+        assert(transform.position.y == camera.position().y)
+        assert(transform.position.x == 96.0)
+        assert(transform.position.y == 64.0)
+        count++
+    }
+    assert(count == 1)
+    controller.stop()
+}
+
+test "propagate ViewportCamera2D into an Application Bundle world" {
+    var application = Application()
+    var bundle = Application.Bundle(application)
+        ..add_system(Application.Schedule.update, inspect_bundle_camera)
+
+    application
+        ..add_plugin(WindowPlugin(WindowPlugin.Settings()
+            ..title = "Bundle-local Scene2D camera"
+            ..width = 64
+            ..height = 64
+            ..hidden = true
+        ))
+        ..add_plugin(Plugins.ViewportCamera2D(
+            Plugins.ViewportCamera2D.Settings()
+                ..position = Math.Vec2(96.0, 64.0)
+        ))
+        ..add_plugin(Application.BundleManager(bundle))
+
     assert(application.run() == 0)
     assert(bundle.is_finalized())
 }
