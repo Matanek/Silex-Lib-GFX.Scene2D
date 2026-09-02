@@ -1485,7 +1485,7 @@ package class Renderer {
     ) {
         let handle = sprite.asset()
         if !sprite.is_visible() || !images.contains(handle) { return }
-        let image = images.snapshot(handle)
+        let image = images.get(handle)
         let cache_index = self.cache_index_for_image(
             0,
             handle.index(),
@@ -1525,7 +1525,7 @@ package class Renderer {
         let atlas = tile_map.atlas()
         let handle = atlas.image()
         if !images.contains(handle) { return }
-        let image = images.snapshot(handle)
+        let image = images.get(handle)
         if image.width() % atlas.tile_width() != 0 ||
             image.height() % atlas.tile_height() != 0
         {
