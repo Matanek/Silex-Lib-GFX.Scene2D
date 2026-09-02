@@ -89,7 +89,7 @@ class SurfaceCacheEntry {
     var textures:GPU.Texture[]
     var surface:CanvasSurface? = null
 
-    init() {
+    module init() {
         self.kind = -1
         self.identity = -1
         self.revision = -1
@@ -157,7 +157,7 @@ public class CanvasSurfaceRenderer {
     private var resident_texture_bytes:int
     private var last_graph_passes:int
 
-    module init() {
+    init() {
         self.device_owner = null
         self.content_renderer = Renderer()
         self.initialized = false
@@ -196,7 +196,26 @@ public class CanvasSurfaceRenderer {
         text_mode:TextMode = TextMode.automatic
     ) CanvasSurface {
         if let device = self.device_owner {
-            return self.render_snapshot(device, snapshot, frame, density, text_mode)
+            return self.render_snapshot(
+                device, snapshot, frame, density, text_mode, false
+            )
+        }
+        panic("GFX.Scene2D CanvasSurfaceRenderer requires a device; construct it with one or use render_on")
+    }
+
+    // Preserves the caller's density instead of grouping it into the adaptive
+    // quarter-step classes used by Scene2D effects. Fixed-resolution consumers
+    // such as Scene3D panels can therefore promise ceil(frame * density).
+    func render_exact(
+        snapshot:Snapshot,
+        frame:Rect,
+        density:float,
+        text_mode:TextMode = TextMode.automatic
+    ) CanvasSurface {
+        if let device = self.device_owner {
+            return self.render_snapshot(
+                device, snapshot, frame, density, text_mode, true
+            )
         }
         panic("GFX.Scene2D CanvasSurfaceRenderer requires a device; construct it with one or use render_on")
     }
@@ -208,7 +227,9 @@ public class CanvasSurfaceRenderer {
         density:float,
         text_mode:TextMode = TextMode.automatic
     ) CanvasSurface {
-        return self.render_snapshot(device, snapshot, frame, density, text_mode)
+        return self.render_snapshot(
+            device, snapshot, frame, density, text_mode, false
+        )
     }
 
     private func render_snapshot(
@@ -216,20 +237,24 @@ public class CanvasSurfaceRenderer {
         snapshot:Snapshot,
         frame:Rect,
         density:float,
-        text_mode:TextMode
+        text_mode:TextMode,
+        exact_density:bool
     ) CanvasSurface {
         self.last_graph_passes = 0
         var content = snapshot.content()
+        var kind = 0
+        if exact_density { kind = 2 }
         return self.render_content(
             device,
-            0,
+            kind,
             snapshot.canvas_id(),
             snapshot.geometry_revision() * 65_537 + snapshot.text_revision(),
             content,
             [],
             frame,
             density,
-            text_mode
+            text_mode,
+            exact_density
         )
     }
 
@@ -300,7 +325,8 @@ public class CanvasSurfaceRenderer {
             effects,
             frame,
             density,
-            text_mode
+            text_mode,
+            false
         )
     }
 
@@ -313,12 +339,17 @@ public class CanvasSurfaceRenderer {
         effects:@Effect[],
         frame:Rect,
         density:float,
-        text_mode:TextMode
+        text_mode:TextMode,
+        exact_density:bool
     ) CanvasSurface {
         self.require_request(frame, density)
         self.require_initialized(device)
-        let density_key = Math.max(1.0, Math.ceil(density * 4.0)) as int
-        let resolved_density = density_key as float / 4.0
+        var density_key = Math.max(1.0, Math.ceil(density * 4.0)) as int
+        var resolved_density = density_key as float / 4.0
+        if exact_density {
+            density_key = Math.max(1.0, Math.round(density * 1_000_000.0)) as int
+            resolved_density = density
+        }
         let known = self.find_entry(
             kind,
             identity,

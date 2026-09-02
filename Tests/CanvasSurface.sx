@@ -217,6 +217,23 @@ test "publish a bounded premultiplied GPU surface within the software tolerance"
     require_software_tolerance(device, drawing, surface)
 }
 
+test "preserve an exact fixed density for external surface consumers" {
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = filtered_rectangle()
+    let frame = Canvas.Rect(Math.Vec2(), Math.Vec2(63.0, 37.0))
+    var snapshot = drawing.snapshot(63, 37)
+    var first = renderer.render_exact(snapshot, frame, 1.37)
+    var reused = renderer.render_exact(snapshot, frame, 1.37)
+
+    assert(first.width() == 87)
+    assert(first.height() == 51)
+    assert(first.density() == 1.37)
+    assert(reused.revision() == first.revision())
+    assert(renderer.render_count() == 2)
+    assert(renderer.cache_hit_count() >= 1)
+}
+
 test "filter mixed content in every text mode without RGBA uploads" {
     var device = GPU.Device()
     var renderer = Scene2D.CanvasSurfaceRenderer(device)

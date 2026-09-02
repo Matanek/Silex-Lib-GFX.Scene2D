@@ -234,6 +234,11 @@ changé. Les compteurs texte séparent tessellation
 vectorielle, rasterisation de glyphes R8 et pixels alpha uploadés de
 `rgba_upload_count()`, qui reste nul sur ce chemin.
 
+`render_exact` conserve au contraire la densité fournie et garantit des
+dimensions `ceil(frame * density)`. Cette variante sert aux consommateurs à
+résolution fixe, notamment `Scene3D.CanvasPanel`; `render` garde ses classes au
+quart pour les effets Scene2D adaptatifs.
+
 Une surface reste attachée à son device. `invalidate()` libère la résidence du
 cache et invalide immédiatement toutes les surfaces de cette génération ; une
 texture encore possédée par une ancienne surface est libérée avec celle-ci,

@@ -223,6 +223,11 @@ same group even when its bounds changed. Text counters distinguish vector tessel
 glyph rasterization, and uploaded alpha pixels from `rgba_upload_count()`,
 which remains zero on this path.
 
+`render_exact` instead preserves the supplied density and guarantees
+`ceil(frame * density)` dimensions. Fixed-resolution consumers such as
+`Scene3D.CanvasPanel` use this variant; `render` keeps quarter-step classes for
+adaptive Scene2D effects.
+
 A surface remains attached to its device. `invalidate()` releases cache
 residency and immediately invalidates every surface from that generation; a
 texture still owned by an old surface is released with that surface but can no
