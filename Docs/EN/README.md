@@ -128,9 +128,12 @@ controller.clear_limits()
 ```
 
 Scroll keeps zooming by default. Explicit `pan` consumes both axes and applies
-`pan_sensitivity / zoom`, like the configured drag. A resize, zoom change, or
-bounds change immediately reclamps both current and desired positions, so
-smoothing never publishes a persistent overshoot.
+`scroll_pan_sensitivity / zoom`. The configured drag keeps its own
+`pan_sensitivity / zoom` scale because precise trackpad deltas and mouse motion
+do not use the same unit. Scrolling moves the camera with the gesture while
+dragging grabs the content. A resize, zoom change, or bounds change immediately
+reclamps both current and desired positions, so smoothing never publishes a
+persistent overshoot.
 
 ## Place an interface in the viewport
 

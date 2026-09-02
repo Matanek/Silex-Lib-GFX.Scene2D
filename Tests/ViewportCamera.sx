@@ -45,13 +45,25 @@ test "center small axes and clamp large axes with overscroll" {
 }
 
 test "choose pan scroll explicitly while preserving zoom by default" {
-    var panning = Controller(ViewportCameraPlugin.Settings(
+    var compatible = Controller(ViewportCameraPlugin.Settings(
         zoom:2.0,
         controls:Controls(scroll:Scroll.pan)
     ))
+    compatible.scroll(Math.Vec2(8.0, -6.0))
+    assert(compatible.position() == Math.Vec2(4.0, -3.0))
+
+    var panning = Controller(ViewportCameraPlugin.Settings(
+        zoom:2.0,
+        pan_sensitivity:1.0,
+        scroll_pan_sensitivity:10.0,
+        controls:Controls(scroll:Scroll.pan)
+    ))
     panning.scroll(Math.Vec2(8.0, -6.0))
-    assert(panning.position() == Math.Vec2(-4.0, -3.0))
+    assert(panning.position() == Math.Vec2(40.0, -30.0))
     assert(panning.zoom() == 2.0)
+
+    panning.pan(Math.Vec2(8.0, -6.0))
+    assert(panning.position() == Math.Vec2(36.0, -33.0))
 
     var zooming = Controller(ViewportCameraPlugin.Settings())
     zooming.scroll(Math.Vec2(8.0, 1.0))

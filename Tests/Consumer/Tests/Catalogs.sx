@@ -17,7 +17,8 @@ test "consume Scene2D directly and through the GFX catalogs" {
     let scene = Plugins.Scene2D()
     let grid = Plugins.Grid2D()
     let viewport = Plugins.ViewportCamera2D(Plugins.ViewportCamera2D.Settings(
-        zoom:2.0
+        zoom:2.0,
+        scroll_pan_sensitivity:10.0
     ))
     var images = Image.Store()
     let atlas = Scene2D.TileAtlas(images.add(Image()), 1, 1)

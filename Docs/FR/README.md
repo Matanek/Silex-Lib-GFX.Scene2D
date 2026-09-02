@@ -134,10 +134,12 @@ controller.clear_limits()
 ```
 
 Le scroll conserve le zoom par défaut. Le choix explicite `pan` consomme ses
-deux axes et applique `pan_sensitivity / zoom`, comme le drag configuré. Un
-resize, un changement de zoom ou de limites reborne immédiatement la position
-courante et la position désirée ; le lissage ne publie donc jamais un
-overshoot durable.
+deux axes et applique `scroll_pan_sensitivity / zoom`. Le drag configuré garde
+sa propre échelle `pan_sensitivity / zoom`, car un delta précis de trackpad et
+un déplacement de souris n'emploient pas la même unité. Le scroll déplace la
+caméra dans le sens du geste ; le drag saisit le contenu. Un resize, un
+changement de zoom ou de limites reborne immédiatement la position courante et
+la position désirée ; le lissage ne publie donc jamais un overshoot durable.
 
 ## Placer une interface dans le viewport
 

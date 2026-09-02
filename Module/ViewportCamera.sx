@@ -108,10 +108,22 @@ public class Controller {
     module func configure_camera(camera:&Camera) { camera.zoom = self.current_zoom }
 
     module func apply_pan(mouse_x:float, mouse_y:float) {
+        self.apply_pan_with_sensitivity(
+            mouse_x,
+            mouse_y,
+            self.settings.pan_sensitivity
+        )
+    }
+
+    private func apply_pan_with_sensitivity(
+        x:float,
+        y:float,
+        sensitivity:float
+    ) {
         if !self.settings.active { return }
-        let scale = self.settings.pan_sensitivity / self.desired_zoom
+        let scale = sensitivity / self.desired_zoom
         self.desired_position = self.desired_position.subtract(
-            Math.Vec2(mouse_x * scale, -mouse_y * scale)
+            Math.Vec2(x * scale, -y * scale)
         )
         self.desired_position = self.clamped_position(
             self.desired_position,
@@ -128,7 +140,11 @@ public class Controller {
 
     module func scroll(delta:Math.Vec2) {
         if self.configured_controls.scroll == Scroll.pan {
-            self.apply_pan(delta.x, delta.y)
+            self.apply_pan_with_sensitivity(
+                -delta.x,
+                delta.y,
+                self.settings.scroll_pan_sensitivity
+            )
         } else {
             self.zoom_wheel(delta.y)
         }
@@ -212,6 +228,7 @@ public struct ViewportCamera:PluginProtocol {
         var zoom_speed:float = 2.0
         var scroll_zoom_speed:float = 0.15
         var pan_sensitivity:float = 1.0
+        var scroll_pan_sensitivity:float = 1.0
         var pan_response:float = 18.0
         var zoom_response:float = 16.0
         var max_delta_time:float = 0.05
@@ -298,6 +315,9 @@ func validate(settings:ViewportCamera.Settings) {
     }
     if settings.pan_sensitivity <= 0.0 {
         panic("GFX.Scene2D.ViewportCamera requires a positive pan sensitivity")
+    }
+    if settings.scroll_pan_sensitivity <= 0.0 {
+        panic("GFX.Scene2D.ViewportCamera requires a positive scroll pan sensitivity")
     }
     if settings.max_delta_time <= 0.0 {
         panic("GFX.Scene2D.ViewportCamera requires a positive maximum delta time")
