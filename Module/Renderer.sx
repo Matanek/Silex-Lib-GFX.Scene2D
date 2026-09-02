@@ -246,6 +246,7 @@ struct SurfaceDraw {
     var surface:CanvasSurface
     let model:Math.Mat4
     let size:Math.Vec2
+    let color:Color
     let layer:int
     let depth:float
     let order:int
@@ -775,6 +776,28 @@ package class Renderer {
         if !canvas.visible { return }
         let previous_snapshot_id = canvas.prepared_revision()
         self.synchronize_scene_canvas(canvas)
+        if let filter = canvas.filter {
+            if let frame = canvas.filter_frame() {
+                let model = canvas.affine_model(transform, self.viewport)
+                let density = effect_density(model, self.display_scale)
+                var snapshot = canvas.authored_snapshot()
+                var surface = surfaces.render_on(
+                    device,
+                    snapshot,
+                    frame,
+                    density,
+                    canvas.text_mode,
+                    filter
+                )
+                self.append_canvas_surface(
+                    canvas,
+                    model,
+                    surface,
+                    entity.index * 2048
+                )
+            }
+            return
+        }
         if !canvas.vector_geometry_compatible() || canvas.has_text() {
             let model = canvas.affine_model(transform, self.viewport)
             var content = canvas.content()
@@ -930,6 +953,7 @@ package class Renderer {
             surface:surface,
             model:affine_matrix(model, canvas.depth, bounds.position),
             size:bounds.size,
+            color:canvas.color,
             layer:canvas.layer,
             depth:canvas.depth,
             order:order,
@@ -2117,11 +2141,11 @@ package class Renderer {
                             selected_projection,
                             draw.size,
                             Math.Vec2(),
-                            Color.white(),
+                            draw.color,
                             draw.depth,
                             Math.Vec4(0.0, 0.0, 1.0, 1.0)
                         )
-                        let texture = draw.surface.texture()
+                        var texture = draw.surface.texture()
                         pass.bind(pipeline)
                         pass.vertex_uniform(0, uniform, 256)
                         pass.fragment_sampler(0, texture, sampler)
@@ -3151,7 +3175,7 @@ local func premultiplied_color_target(
     return targets
 }
 
-local func upload_buffer(
+package func upload_buffer(
     device:@GPU.Device,
     bytes:str,
     byte_count:int,

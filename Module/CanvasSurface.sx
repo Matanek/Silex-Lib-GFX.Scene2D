@@ -8,6 +8,7 @@ use GFX.Color
 use GFX.GPU
 use GFX.Rendering.FrameGraph
 use GFX.Scene2D.Canvas.TextMode
+use GFX.Scene2D.CanvasFilter.CanvasFilter
 use GFX.Scene2D.Packing
 use GFX.Scene2D.Renderer
 use STD.Math
@@ -52,9 +53,9 @@ public class CanvasSurface {
         self.current_device_generation = device_state.generation
     }
 
-    func texture() @GPU.Texture {
+    func texture() GPU.Texture {
         if self.is_valid() {
-            return @self.retained_textures[0]
+            return self.retained_textures[0]
         }
         panic("GFX.Scene2D CanvasSurface was invalidated with its GPU device")
     }
@@ -139,6 +140,94 @@ class SurfaceCacheEntry {
     }
 }
 
+class FilteredSurfaceCacheEntry {
+    var source_revision:int
+    var source_device_generation:int
+    var filter_identity:int
+    var filter_revision:int
+    var texture:GPU.Texture? = null
+    var surface:CanvasSurface? = null
+
+    init() {
+        self.source_revision = -1
+        self.source_device_generation = -1
+        self.filter_identity = -1
+        self.filter_revision = -1
+    }
+
+    func matches(source:@CanvasSurface, filter:@CanvasFilter) bool {
+        return self.source_revision == source.revision() &&
+            self.source_device_generation == source.device_generation() &&
+            self.filter_identity == filter.id() &&
+            self.filter_revision == filter.revision() &&
+            same_frame(source.bounds(), self.required_bounds())
+    }
+
+    func reusable(source:@CanvasSurface, filter:@CanvasFilter) bool {
+        if self.source_revision != source.revision() ||
+            self.source_device_generation != source.device_generation() ||
+            self.filter_identity != filter.id()
+        { return false }
+        if let retained = self.surface {
+            return same_frame(source.bounds(), retained.bounds()) &&
+                source.width() == retained.width() &&
+                source.height() == retained.height()
+        }
+        return false
+    }
+
+    func required_bounds() Rect {
+        if let retained = self.surface { return retained.bounds() }
+        return Rect(Math.Vec2(), Math.Vec2(1.0))
+    }
+
+    func texture_byte_count() int {
+        if let retained = self.texture { return retained.byte_count() }
+        return 0
+    }
+
+    func release() {
+        self.surface = null
+        self.texture = null
+        self.source_revision = -1
+        self.source_device_generation = -1
+        self.filter_identity = -1
+        self.filter_revision = -1
+    }
+}
+
+class CanvasFilterPipelineEntry {
+    let program:GPU.ShaderProgram
+    let format:GPU.TextureFormat
+    let samples:GPU.Samples
+    let layout:int
+    var pipeline:GPU.GraphicsPipeline
+
+    init(
+        program:GPU.ShaderProgram,
+        format:GPU.TextureFormat,
+        samples:GPU.Samples,
+        layout:int,
+        pipeline:GPU.GraphicsPipeline
+    ) {
+        self.program = program
+        self.format = format
+        self.samples = samples
+        self.layout = layout
+        self.pipeline = pipeline
+    }
+
+    func matches(
+        program:@GPU.ShaderProgram,
+        format:GPU.TextureFormat,
+        samples:GPU.Samples,
+        layout:int
+    ) bool {
+        return self.format == format && self.samples == samples &&
+            self.layout == layout && self.program.same_program(program)
+    }
+}
+
 public class CanvasSurfaceRenderer {
     private var device_owner:GPU.Device? = null
     private var content_renderer:Renderer
@@ -147,7 +236,12 @@ public class CanvasSurfaceRenderer {
     private var effect_sampler:GPU.Sampler? = null
     private var initialized:bool
     private var entries:SurfaceCacheEntry[]
+    private var filtered_entries:FilteredSurfaceCacheEntry[]
+    private var filter_pipelines:CanvasFilterPipelineEntry[]
+    private var filter_vertices:GPU.Buffer? = null
+    private var filter_indices:GPU.Buffer? = null
     private var eviction_cursor:int
+    private var filtered_eviction_cursor:int
     private var current_surface_revision:int
     private var current_device_generation:int
     private var device_state:SurfaceDeviceState
@@ -156,13 +250,20 @@ public class CanvasSurfaceRenderer {
     private var texture_allocations:int
     private var resident_texture_bytes:int
     private var last_graph_passes:int
+    private var filter_renders:int
+    private var filter_cache_hits:int
+    private var filter_pipeline_creations:int
+    private var filter_pipeline_hits:int
 
     init() {
         self.device_owner = null
         self.content_renderer = Renderer()
         self.initialized = false
         self.entries = []
+        self.filtered_entries = []
+        self.filter_pipelines = []
         self.eviction_cursor = 0
+        self.filtered_eviction_cursor = 0
         self.current_surface_revision = 0
         self.current_device_generation = 1
         self.device_state = SurfaceDeviceState(1)
@@ -171,6 +272,10 @@ public class CanvasSurfaceRenderer {
         self.texture_allocations = 0
         self.resident_texture_bytes = 0
         self.last_graph_passes = 0
+        self.filter_renders = 0
+        self.filter_cache_hits = 0
+        self.filter_pipeline_creations = 0
+        self.filter_pipeline_hits = 0
     }
 
     public init(device:GPU.Device) {
@@ -178,7 +283,10 @@ public class CanvasSurfaceRenderer {
         self.content_renderer = Renderer()
         self.initialized = false
         self.entries = []
+        self.filtered_entries = []
+        self.filter_pipelines = []
         self.eviction_cursor = 0
+        self.filtered_eviction_cursor = 0
         self.current_surface_revision = 0
         self.current_device_generation = 1
         self.device_state = SurfaceDeviceState(1)
@@ -187,18 +295,27 @@ public class CanvasSurfaceRenderer {
         self.texture_allocations = 0
         self.resident_texture_bytes = 0
         self.last_graph_passes = 0
+        self.filter_renders = 0
+        self.filter_cache_hits = 0
+        self.filter_pipeline_creations = 0
+        self.filter_pipeline_hits = 0
     }
 
     func render(
         snapshot:Snapshot,
         frame:Rect,
         density:float,
-        text_mode:TextMode = TextMode.automatic
+        text_mode:TextMode = TextMode.automatic,
+        filter:CanvasFilter? = null
     ) CanvasSurface {
         if let device = self.device_owner {
-            return self.render_snapshot(
+            var source = self.render_snapshot(
                 device, snapshot, frame, density, text_mode, false
             )
+            if let selected = filter {
+                return self.render_filter(device, source, selected)
+            }
+            return source
         }
         panic("GFX.Scene2D CanvasSurfaceRenderer requires a device; construct it with one or use render_on")
     }
@@ -225,11 +342,16 @@ public class CanvasSurfaceRenderer {
         snapshot:Snapshot,
         frame:Rect,
         density:float,
-        text_mode:TextMode = TextMode.automatic
+        text_mode:TextMode = TextMode.automatic,
+        filter:CanvasFilter? = null
     ) CanvasSurface {
-        return self.render_snapshot(
+        var source = self.render_snapshot(
             device, snapshot, frame, density, text_mode, false
         )
+        if let selected = filter {
+            return self.render_filter(device, source, selected)
+        }
+        return source
     }
 
     private func render_snapshot(
@@ -258,6 +380,119 @@ public class CanvasSurfaceRenderer {
         )
     }
 
+    private func render_filter(
+        device:@GPU.Device,
+        source:@CanvasSurface,
+        filter:@CanvasFilter
+    ) CanvasSurface {
+        self.require_initialized(device)
+        if !source.is_valid() || source.device_generation() != self.current_device_generation {
+            panic("GFX.Scene2D CanvasFilter source belongs to an invalid or different GPU device")
+        }
+        var source_texture = source.texture()
+        if source_texture.format() != GPU.TextureFormat.rgba8_unorm ||
+            source_texture.samples() != GPU.Samples.one ||
+            !source_texture.usage().sampled
+        {
+            panic("GFX.Scene2D CanvasFilter.v1 requires a sampled single-sample RGBA8 source")
+        }
+
+        let known = self.find_filtered_entry(source, filter)
+        if known >= 0 {
+            if let retained = self.filtered_entries[known].surface {
+                if retained.is_valid() {
+                    self.filter_cache_hits++
+                    return retained
+                }
+            }
+        }
+
+        var entry_index = self.find_reusable_filtered_entry(source, filter)
+        if entry_index < 0 { entry_index = self.reusable_filtered_entry() }
+        var entry = self.filtered_entries[entry_index]
+        var output = entry.texture
+        if !entry.reusable(source, filter) {
+            self.resident_texture_bytes -= entry.texture_byte_count()
+            entry.release()
+            output = self.make_texture(
+                device,
+                source.width(),
+                source.height(),
+                0,
+                GPU.TextureFormat.rgba8_unorm
+            )
+            entry.texture = output
+        } else {
+            entry.surface = null
+        }
+        entry.source_revision = source.revision()
+        entry.source_device_generation = source.device_generation()
+        entry.filter_identity = filter.id()
+        entry.filter_revision = filter.revision()
+
+        if let target = output {
+            if let sampler = self.effect_sampler {
+                if let vertices = self.filter_vertices {
+                    if let indices = self.filter_indices {
+                        let program = filter.program()
+                        var pipeline = self.canvas_filter_pipeline(
+                            device,
+                            program,
+                            GPU.TextureFormat.rgba8_unorm,
+                            GPU.Samples.one,
+                            1
+                        )
+                        var base = Packing.canvas_filter_uniform(
+                            source.bounds(),
+                            source.width(),
+                            source.height()
+                        )
+                        var commands = device.commands()
+                        var pass = commands.render(GPU.ColorTarget(
+                            texture:target,
+                            clear:Color.transparent(),
+                            load:GPU.Load.clear,
+                            store:GPU.Store.preserve,
+                            cycle:false
+                        ))
+                        pass.bind(pipeline)
+                        pass.vertex_uniform(0, base, 96)
+                        pass.fragment_uniform(0, base, 96)
+                        var parameters = filter.parameters()
+                        if !parameters.is_empty() {
+                            pass.fragment_uniform(
+                                1,
+                                @parameters[0:parameters.count()]
+                            )
+                        }
+                        pass.fragment_sampler(0, source_texture, sampler)
+                        pass.vertex_buffer(0, vertices)
+                        pass.index_buffer(indices)
+                        pass.draw_indexed(6)
+                        pass.finish()
+                        commands.submit()
+
+                        self.current_surface_revision++
+                        var surface = CanvasSurface(
+                            target,
+                            source.bounds(),
+                            source.width(),
+                            source.height(),
+                            source.density(),
+                            self.current_surface_revision,
+                            self.device_state
+                        )
+                        entry.surface = surface
+                        self.filter_renders++
+                        self.last_graph_passes++
+                        return surface
+                    }
+                }
+            }
+        }
+        panic("GFX.Scene2D CanvasFilter.v1 resources are unavailable")
+    }
+
     func replace_device(device:GPU.Device) {
         self.invalidate()
         self.device_owner = device
@@ -267,6 +502,11 @@ public class CanvasSurfaceRenderer {
         self.device_state.valid = false
         for entry in self.entries { entry.release() }
         self.entries.clear()
+        for entry in self.filtered_entries { entry.release() }
+        self.filtered_entries.clear()
+        self.filter_pipelines.clear()
+        self.filter_vertices = null
+        self.filter_indices = null
         self.effect_pipeline = null
         self.effect_float_pipeline = null
         self.effect_sampler = null
@@ -284,6 +524,11 @@ public class CanvasSurfaceRenderer {
     func texture_byte_count() int { return self.resident_texture_bytes }
     func rgba_upload_count() int { return 0 }
     func graph_pass_count() int { return self.last_graph_passes }
+    func filter_render_count() int { return self.filter_renders }
+    func filter_cache_hit_count() int { return self.filter_cache_hits }
+    func filter_pipeline_count() int { return self.filter_pipelines.count() }
+    func filter_pipeline_creation_count() int { return self.filter_pipeline_creations }
+    func filter_pipeline_cache_hit_count() int { return self.filter_pipeline_hits }
     func image_upload_count() int { return self.content_renderer.image_upload_count() }
     func vector_tessellation_count() int {
         return self.content_renderer.vector_tessellation_count()
@@ -506,8 +751,77 @@ public class CanvasSurfaceRenderer {
                 address_v:GPU.AddressMode.clamp_to_edge,
                 name:"GFX.Scene2D Canvas effect sampler"
             ))
+            self.filter_vertices = GFX.Scene2D.Renderer.upload_buffer(
+                device,
+                Packing.quad_vertices(),
+                64,
+                GPU.BufferUsage.vertex(),
+                "GFX.Scene2D CanvasFilter.v1 unit vertices"
+            )
+            self.filter_indices = GFX.Scene2D.Renderer.upload_buffer(
+                device,
+                Packing.quad_indices(),
+                24,
+                GPU.BufferUsage.index(),
+                "GFX.Scene2D CanvasFilter.v1 indices"
+            )
             self.initialized = true
             return
+    }
+
+    private func canvas_filter_pipeline(
+        device:@GPU.Device,
+        program:GPU.ShaderProgram,
+        format:GPU.TextureFormat,
+        samples:GPU.Samples,
+        layout:int
+    ) GPU.GraphicsPipeline {
+        var index = 0
+        while index < self.filter_pipelines.count() {
+            var entry = self.filter_pipelines[index]
+            if entry.matches(program, format, samples, layout) {
+                self.filter_pipeline_hits++
+                return entry.pipeline
+            }
+            index++
+        }
+        var buffers:GPU.VertexBufferLayout[] = []
+        buffers.append(GPU.VertexBufferLayout(slot:0, pitch:16))
+        var attributes:GPU.VertexAttribute[] = []
+        attributes.append(GPU.VertexAttribute(
+            location:0,
+            buffer_slot:0,
+            format:GPU.VertexFormat.float_32x2,
+            offset:0
+        ))
+        attributes.append(GPU.VertexAttribute(
+            location:1,
+            buffer_slot:0,
+            format:GPU.VertexFormat.float_32x2,
+            offset:8
+        ))
+        var targets:GPU.ColorTargetFormat[] = []
+        targets.append(GPU.ColorTargetFormat(format:format))
+        var pipeline = device.graphics_pipeline(
+            program,
+            GPU.GraphicsPipelineSettings(
+                vertex_buffers:buffers,
+                attributes:attributes,
+                rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
+                multisample:GPU.MultisampleState(samples:samples),
+                color_targets:targets,
+                name:"GFX.Scene2D CanvasFilter.v1"
+            )
+        )
+        self.filter_pipelines.append(CanvasFilterPipelineEntry(
+            program,
+            format,
+            samples,
+            layout,
+            pipeline
+        ))
+        self.filter_pipeline_creations++
+        return pipeline
     }
 
     private func prepare_nested(
@@ -670,6 +984,45 @@ public class CanvasSurfaceRenderer {
         let result = self.eviction_cursor
         self.eviction_cursor = (self.eviction_cursor + 1) % self.entries.count()
         return result
+    }
+
+    private func reusable_filtered_entry() int {
+        if self.filtered_entries.count() < 128 {
+            self.filtered_entries.append(FilteredSurfaceCacheEntry())
+            return self.filtered_entries.count() - 1
+        }
+        let result = self.filtered_eviction_cursor
+        self.filtered_eviction_cursor =
+            (self.filtered_eviction_cursor + 1) % self.filtered_entries.count()
+        return result
+    }
+
+    private func find_filtered_entry(
+        source:@CanvasSurface,
+        filter:@CanvasFilter
+    ) int {
+        var index = 0
+        while index < self.filtered_entries.count() {
+            if self.filtered_entries[index].matches(source, filter) {
+                return index
+            }
+            index++
+        }
+        return -1
+    }
+
+    private func find_reusable_filtered_entry(
+        source:@CanvasSurface,
+        filter:@CanvasFilter
+    ) int {
+        var index = 0
+        while index < self.filtered_entries.count() {
+            if self.filtered_entries[index].reusable(source, filter) {
+                return index
+            }
+            index++
+        }
+        return -1
     }
 
     private func find_entry(

@@ -134,6 +134,45 @@ dernier n'est pas installé, Scene2D échoue explicitement avec le diagnostic
 `Canvas filtered layer is not eligible for the analytic shadow path` au lieu
 d'ignorer l'effet.
 
+## Appliquer un filtre de placement Canvas
+
+`CanvasFilter` est une porte de sortie Scene2D appliquée à la texture finale du
+Canvas, après ses effets portables et avant la teinte du placement. Elle force
+donc une isolation GPU bornée ; elle ne remplace pas le shader de géométrie
+analytique. Deux placements qui partagent dessin, filtre et classe de densité
+partagent aussi la source et le résultat filtré, même si translation, rotation
+ou `color` diffèrent.
+
+```sx
+let program = GPU.ShaderProgram.hlsl(file:"Shaders/Heatmap.hlsl")
+var filter = Scene2D.CanvasFilter(program)
+var placement = Scene2D.Canvas(drawing, 320, 180)
+placement.filter = filter
+```
+
+L’ABI `CanvasFilter.v1` impose `vertex_main` et `fragment_main`. Le vertex input
+est `float2 position : POSITION0` puis `float2 uv : TEXCOORD0`; la sortie porte
+`float4 position : SV_Position` et `float2 uv : TEXCOORD0`. Le cbuffer commun
+`b0, space1`, lié aux deux stages, occupe exactement 96 octets :
+`float4x4 clipFromUnit`, puis `logicalOrigin`, `logicalSize`, `pixelSize` et
+`inversePixelSize` en `float2`. La texture RGBA linéaire prémultipliée et son
+sampler linéaire clampé sont `t0/s0, space2`. Le fragment retourne un
+`float4 : SV_Target0` prémultiplié.
+
+Les positions et UV couvrent `[0, 1]²`, origine en haut à gauche. Un centre de
+texel entier `i` vaut `(i + 0.5) * inversePixelSize`. La texture n’a aucun
+padding caché et le filtre conserve ses bornes et dimensions. Le vertex shader
+calcule exactement
+`mul(clipFromUnit, float4(input.position, 0.0, 1.0))` et transmet l’UV.
+
+Un second cbuffer fragment `b1, space1` peut contenir de 16 à 4096 octets, par
+blocs de 16. Passez ces octets au constructeur puis appelez `replace(bytes)` :
+la révision avance et seule la passe de filtre est rejouée. La taille du bloc
+reste fixe. `CanvasFilter.compatibility(program, parameter_size)` permet de
+prévalider entry points et comptes de ressources avec un diagnostic sans créer
+le filtre. Aucune texture supplémentaire, storage resource, profondeur ou état
+de rasterisation personnalisé n’appartient à v1.
+
 ## Comprendre la rétention et les caches
 
 Le composant conserve l'identité du `GFX.Canvas.Canvas` reçu. Si le producteur
@@ -190,8 +229,9 @@ gardent respectivement les parcours texte et géométrie/ECS.
 `CanvasSurfaceRenderer` rend un snapshot Canvas dans une texture GPU bornée,
 échantillonnable par un autre pipeline. Le service appartient au `GPU.Device`
 fourni à sa construction. `CanvasSurface` conserve fortement le résultat et
-expose seulement `texture()`, un emprunt en lecture seule ; aucun handle natif
-ni cache interne de Scene2D ne traverse l’API.
+expose sa valeur opaque `GPU.Texture` par `texture()` afin de pouvoir construire
+une `GPU.TextureRegion` ou la lier à un sampler ; aucun handle natif ni cache
+interne de Scene2D ne traverse l’API.
 
 ```sx
 use GFX.Canvas

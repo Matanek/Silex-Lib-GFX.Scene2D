@@ -254,6 +254,29 @@ func canvas_effect_uniform(
     return bytes
 }
 
+func canvas_filter_uniform(
+    bounds:GFX.Canvas.Shapes.Rect,
+    width:int,
+    height:int
+) str {
+    var bytes = exact_storage(96)
+    let address = C.address_bits(C.mutable_string_pointer(bytes))
+    write_mat4(address, 0, Math.Mat4(
+        Math.Vec4(2.0, 0.0, 0.0, 0.0),
+        Math.Vec4(0.0, -2.0, 0.0, 0.0),
+        Math.Vec4(0.0, 0.0, 1.0, 0.0),
+        Math.Vec4(-1.0, 1.0, 0.0, 1.0)
+    ))
+    write_vec2(address, 64, bounds.position)
+    write_vec2(address, 72, bounds.size)
+    write_vec2(address, 80, Math.Vec2(width as float, height as float))
+    write_vec2(address, 88, Math.Vec2(
+        1.0 / width as float,
+        1.0 / height as float
+    ))
+    return bytes
+}
+
 func quad_vertices() str {
     var bytes = storage(64)
     let address = C.address_bits(C.mutable_string_pointer(bytes))
@@ -322,6 +345,16 @@ func storage(minimum:int) str {
     var bytes = "\0"
     while C.byte_count(bytes) < minimum as uint { bytes = bytes + bytes }
     return bytes
+}
+
+func exact_storage(count:int) str {
+    var bytes:uint8[] = []
+    var index = 0
+    while index < count {
+        bytes.append(0 as uint8)
+        index++
+    }
+    return C.string(@bytes[0:bytes.count()])
 }
 
 local func write_float(address:uint, offset:int, value:float) {
