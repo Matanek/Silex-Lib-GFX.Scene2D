@@ -259,6 +259,9 @@ func verify_coverage_cache(
     assert(renderer.text_uploaded_pixel_count() == probe.uploaded)
     assert(renderer.coverage_instance_upload_count() == probe.instance_uploads)
     assert(renderer.coverage_instance_allocation_count() == probe.instance_allocations)
+    assert(renderer.coverage_layer_cache_hit_count() > 0)
+    assert(renderer.coverage_layer_cache_miss_count() == 1)
+    assert(renderer.coverage_layer_build_count() == 1)
     assert(renderer.coverage_atlas_page_count() == 1)
     assert(renderer.coverage_glyph_instance_count() > 0)
     controller.stop()
@@ -267,13 +270,15 @@ func verify_coverage_cache(
 class CoverageRingProbe {
     var frames:int = 0
     var entity:ECS.Entity? = null
+    var rasters:int = 0
+    var uploaded:int = 0
 }
 
 func coverage_ring_drawing(frame:int) Canvas {
     var drawing = Canvas()
     drawing.paint(func(painter:&Canvas.Painter) {
         painter.text(
-            "bounded coverage stream $(frame)",
+            "digits 0123456789 value $(frame)",
             Math.Vec2(2.0),
             Canvas.TextStyle(size:12.0),
             clip:Canvas.Rect(Math.Vec2(), Math.Vec2(150.0, 24.0))
@@ -301,9 +306,27 @@ func verify_coverage_ring(
     controller:&Application.Controller
 ) {
     assert(renderer.coverage_instance_allocation_count() <= 4)
+    if probe.frames == 0 {
+        probe.rasters = renderer.coverage_raster_count()
+        probe.uploaded = renderer.text_uploaded_pixel_count()
+        assert(probe.rasters > 0)
+        assert(probe.uploaded > 0)
+    } else {
+        // Numeric panels may rebuild a line, but the atlas must continue to
+        // reuse the ten already hinted digit glyphs.
+        assert(renderer.coverage_raster_count() == probe.rasters)
+        assert(renderer.text_uploaded_pixel_count() == probe.uploaded)
+    }
+    // SceneCanvas detaches its first replacement from the authored Canvas;
+    // the initial and then retained TextLayer identities occupy two entries.
+    assert(renderer.coverage_layer_cache_count() <= 2)
+    assert(renderer.coverage_layer_cache_index_count() ==
+        renderer.coverage_layer_cache_count())
     if probe.frames >= 12 {
         assert(renderer.coverage_instance_allocation_count() == 4)
         assert(renderer.coverage_instance_upload_count() >= 12)
+        assert(renderer.coverage_layer_cache_count() == 2)
+        assert(renderer.coverage_layer_build_count() >= 12)
         controller.stop()
         return
     }
@@ -329,6 +352,69 @@ test "retain hinted coverage at explicit density without a second-frame upload" 
     application.add_plugin(Scene2D.Plugin())
     application.add_system(Application.Schedule.startup, create_coverage_text)
     application.add_after_system(Application.Schedule.render, verify_coverage_cache)
+    assert(application.run() == 0)
+}
+
+func create_batched_coverage_text(world:&ECS.World) {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.text(
+            "FIRST",
+            Math.Vec2(4.0, 4.0),
+            Canvas.TextStyle(size:12.0, color:Color.cyan_300())
+        )
+        painter.text(
+            "SECOND",
+            Math.Vec2(72.0, 28.0),
+            Canvas.TextStyle(size:14.0, color:Color.amber_300())
+        )
+        painter.text(
+            "THIRD",
+            Math.Vec2(20.0, 52.0),
+            Canvas.TextStyle(size:13.0, color:Color.white())
+        )
+        painter.text(
+            "CLIPPED",
+            Math.Vec2(90.0, 52.0),
+            Canvas.TextStyle(size:13.0, color:Color.indigo_300()),
+            clip:Canvas.Rect(Math.Vec2(90.0, 52.0), Math.Vec2(50.0, 16.0))
+        )
+    })
+    world.spawn(ECS.EntityRecipe()
+        ..with(Components.Transform2D())
+        ..with(Components.Canvas(drawing, 160, 72)
+            ..space = Components.CanvasSpace.viewport
+            ..text_mode = Scene2D.CanvasTextMode.coverage
+            ..coverage_density = 2.0
+        )
+    )
+}
+
+func verify_batched_coverage_text(
+    renderer:@Renderer,
+    rendering:@Rendering.Renderer,
+    controller:&Application.Controller
+) {
+    assert(renderer.coverage_glyph_draw_count() == 4)
+    assert(rendering.stats().draw_calls() == 2)
+    controller.stop()
+}
+
+test "batch compatible coverage text commands from one Canvas" {
+    var application = Application()
+    application.add_plugin(WindowPlugin(WindowPlugin.Settings()
+        ..title = "Scene2D batched coverage text"
+        ..width = 160
+        ..height = 72
+        ..hidden = true
+    ))
+    application.add_plugin(Rendering.Plugin())
+    application.add_plugin(Scene2D.Plugin())
+    application.add_system(Application.Schedule.startup, create_batched_coverage_text)
+    application.add_after_system(
+        Application.Schedule.render,
+        verify_batched_coverage_text
+    )
     assert(application.run() == 0)
 }
 

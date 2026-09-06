@@ -193,6 +193,26 @@ class CoverageBlockCache {
     }
 }
 
+class CoverageLayerCache {
+    var identity:int
+    var revision:int
+    var density:float
+    var color:Color
+    var depth:float
+    var instances:CoverageGlyphInstance[]
+    var ranges:CoverageBlockRange[]
+
+    init() {
+        self.identity = 0
+        self.revision = 0
+        self.density = 0.0
+        self.color = Color.transparent()
+        self.depth = 0.0
+        self.instances = []
+        self.ranges = []
+    }
+}
+
 func image_cache_key(kind:int, index:int, generation:int) int {
     if kind < 0 || index < 0 || generation < 0 {
         panic("GFX.Scene2D image cache keys must not be negative")
@@ -444,6 +464,12 @@ package class Renderer {
     private var coverage_instance_packed:str
     private var coverage_instance_uploads:int
     private var coverage_instance_allocations:int
+    private var coverage_layer_cache:CoverageLayerCache[]
+    private var coverage_layer_cache_indices:Dictionary<int, int>
+    private var coverage_layer_cache_cursor:int
+    private var coverage_layer_cache_hits:int
+    private var coverage_layer_cache_misses:int
+    private var coverage_layer_builds:int
     private var coverage_block_cache:CoverageBlockCache[]
     private var coverage_block_cache_indices:Dictionary<int, int>
     private var coverage_block_cache_cursor:int
@@ -538,6 +564,15 @@ package class Renderer {
         self.coverage_instance_packed = ""
         self.coverage_instance_uploads = 0
         self.coverage_instance_allocations = 0
+        self.coverage_layer_cache = []
+        self.coverage_layer_cache_indices = Dictionary<int, int>(
+            hash:coverage_block_identity_hash,
+            minimum_capacity:256
+        )
+        self.coverage_layer_cache_cursor = 0
+        self.coverage_layer_cache_hits = 0
+        self.coverage_layer_cache_misses = 0
+        self.coverage_layer_builds = 0
         self.coverage_block_cache = []
         self.coverage_block_cache_indices = Dictionary<int, int>(
             hash:coverage_block_identity_hash,
@@ -1301,13 +1336,30 @@ package class Renderer {
                 order
             )
         }
+        let color = multiplied_color(layer.color(), canvas.color)
+        let layer_identity = layer.id()
+        var cache_index = self.coverage_layer_cache_index(layer_identity)
+        if cache_index >= 0 {
+            var cache = self.coverage_layer_cache[cache_index]
+            if cache.identity == layer_identity && cache.revision == layer.revision() &&
+                cache.density == density && cache.depth == canvas.depth &&
+                same_color(cache.color, color)
+            {
+                self.coverage_layer_cache_hits++
+                self.append_cached_coverage_layer(
+                    transform,
+                    canvas,
+                    layer,
+                    cache.instances,
+                    cache.ranges,
+                    order
+                )
+                return true
+            }
+        }
+        self.coverage_layer_cache_misses++
         var runs = layer.coverage_runs(density)
         if runs.is_empty() { return true }
-        let authored = canvas.affine_model(transform, self.viewport)
-        let layer_position = layer.position()
-        let model = translated_affine(authored, layer_position)
-        let color = multiplied_color(layer.color(), canvas.color)
-        let clip = coverage_clip(canvas, layer, layer_position)
         var layer_instances:CoverageGlyphInstance[] = []
         var layer_pages:int[] = []
         for coverage_run in runs {
@@ -1330,9 +1382,9 @@ package class Renderer {
                 let retained_slot = self.coverage_glyph_slots[slot]
                 if retained_slot.page < 0 { continue }
                 let position = Math.Vec2(
-                    coverage_run.origin.x - layer_position.x +
+                    coverage_run.origin.x +
                         Math.round(glyph.origin_x * density as float64) as int as float / density,
-                    coverage_run.origin.y - layer_position.y -
+                    coverage_run.origin.y -
                         Math.round(glyph.origin_y * density as float64) as int as float / density
                 ).add(retained_slot.offset)
                 self.append_coverage_instance(
@@ -1363,11 +1415,63 @@ package class Renderer {
             layer_pages,
             self.coverage_atlas_pages.count()
         )
+        // Panels commonly keep a line stable for hundreds of frames. Retain
+        // its prepared glyph instances, but cap both entry count and payload:
+        // 256 layers of at most 128 instances stay below roughly 2 MiB.
+        if grouped.instances.count() <= 128 {
+            if cache_index < 0 {
+                cache_index = self.reusable_coverage_layer_cache()
+                let previous_identity = self.coverage_layer_cache[cache_index].identity
+                if previous_identity > 0 {
+                    self.coverage_layer_cache_indices.remove(previous_identity)
+                }
+                self.coverage_layer_cache_indices.set(layer_identity, cache_index)
+            }
+            var cache = self.coverage_layer_cache[cache_index]
+            cache.identity = layer_identity
+            cache.revision = layer.revision()
+            cache.density = density
+            cache.color = color
+            cache.depth = canvas.depth
+            cache.instances = grouped.instances
+            cache.ranges = grouped.ranges
+            self.coverage_layer_builds++
+            self.append_cached_coverage_layer(
+                transform,
+                canvas,
+                layer,
+                cache.instances,
+                cache.ranges,
+                order
+            )
+            return true
+        }
+        self.append_cached_coverage_layer(
+            transform,
+            canvas,
+            layer,
+            grouped.instances,
+            grouped.ranges,
+            order
+        )
+        return true
+    }
+
+    private func append_cached_coverage_layer(
+        transform:@Transform,
+        canvas:@SceneCanvas,
+        layer:@TextLayer,
+        instances:@CoverageGlyphInstance[],
+        ranges:@CoverageBlockRange[],
+        order:int
+    ) {
+        let model = canvas.affine_model(transform, self.viewport)
+        let clip = coverage_clip(canvas, layer, Math.Vec2())
         let instance_base = self.coverage_glyph_instances.count()
-        for prepared in grouped.instances {
+        for prepared in instances {
             self.coverage_glyph_instances.append(prepared)
         }
-        for prepared in grouped.ranges {
+        for prepared in ranges {
             self.coverage_glyph_draws.append(CoverageGlyphDraw(
                 page:prepared.page,
                 first_instance:instance_base + prepared.first_instance,
@@ -1381,7 +1485,24 @@ package class Renderer {
                 block_cache:-1
             ))
         }
-        return true
+    }
+
+    private func coverage_layer_cache_index(identity:int) int {
+        if self.coverage_layer_cache_indices.contains(identity) {
+            return self.coverage_layer_cache_indices.get(identity) + 0
+        }
+        return -1
+    }
+
+    private func reusable_coverage_layer_cache() int {
+        if self.coverage_layer_cache.count() < 256 {
+            self.coverage_layer_cache.append(CoverageLayerCache())
+            return self.coverage_layer_cache.count() - 1
+        }
+        let selected = self.coverage_layer_cache_cursor
+        self.coverage_layer_cache_cursor =
+            (self.coverage_layer_cache_cursor + 1) % 256
+        return selected
     }
 
     private func collect_retained_coverage_block(
@@ -2181,8 +2302,21 @@ package class Renderer {
                 self.draw_scene_sprite(pass, self.sprite_draws[entry.index])
                 cursor++
             } elif entry.kind == 2 {
-                self.draw_coverage_glyphs(pass, self.coverage_glyph_draws[entry.index])
-                cursor++
+                let draw = self.coverage_glyph_draws[entry.index]
+                var instance_count = draw.instance_count
+                var end = cursor + 1
+                var previous = draw
+                while end < self.scene_entries.count() {
+                    let next_entry = self.scene_entries[end]
+                    if next_entry.kind != 2 { break }
+                    let next = self.coverage_glyph_draws[next_entry.index]
+                    if !coverage_draws_are_contiguous(previous, next) { break }
+                    instance_count += next.instance_count
+                    previous = next
+                    end++
+                }
+                self.draw_coverage_glyphs(pass, draw, instance_count)
+                cursor = end
             } elif entry.kind == 3 {
                 self.draw_tile_map(pass, self.tile_map_draws[entry.index])
                 cursor++
@@ -2373,11 +2507,15 @@ package class Renderer {
         }
     }
 
-    private func draw_coverage_glyphs(pass:@GPU.RenderPass, draw:CoverageGlyphDraw) {
+    private func draw_coverage_glyphs(
+        pass:@GPU.RenderPass,
+        draw:CoverageGlyphDraw,
+        instance_count:int
+    ) {
         if draw.block_cache >= 0 && draw.block_cache < self.coverage_block_cache.count() {
             var block = self.coverage_block_cache[draw.block_cache]
             if let instances = block.instances {
-                self.draw_coverage_buffer(pass, draw, instances)
+                self.draw_coverage_buffer(pass, draw, instances, instance_count)
             }
             return
         }
@@ -2386,14 +2524,15 @@ package class Renderer {
         { return }
         var active = self.coverage_instance_ring[self.coverage_instance_active_slot]
         if let instances = active.instances {
-            self.draw_coverage_buffer(pass, draw, instances)
+            self.draw_coverage_buffer(pass, draw, instances, instance_count)
         }
     }
 
     private func draw_coverage_buffer(
         pass:@GPU.RenderPass,
         draw:@CoverageGlyphDraw,
-        instances:@GPU.Buffer
+        instances:@GPU.Buffer,
+        instance_count:int
     ) {
         if draw.page < 0 || draw.page >= self.coverage_atlas_pages.count() { return }
         var page = self.coverage_atlas_pages[draw.page]
@@ -2420,7 +2559,7 @@ package class Renderer {
                             pass.index_buffer(indices)
                             pass.draw_indexed(
                                 6,
-                                draw.instance_count,
+                                instance_count,
                                 0,
                                 0,
                                 draw.first_instance
@@ -2986,6 +3125,21 @@ package class Renderer {
     }
     package func coverage_instance_allocation_count() int {
         return self.coverage_instance_allocations
+    }
+    package func coverage_layer_cache_hit_count() int {
+        return self.coverage_layer_cache_hits
+    }
+    package func coverage_layer_cache_miss_count() int {
+        return self.coverage_layer_cache_misses
+    }
+    package func coverage_layer_build_count() int {
+        return self.coverage_layer_builds
+    }
+    package func coverage_layer_cache_count() int {
+        return self.coverage_layer_cache.count()
+    }
+    package func coverage_layer_cache_index_count() int {
+        return self.coverage_layer_cache_indices.count()
     }
     package func tile_instance_count() int { return self.tile_instances.count() }
     package func tile_draw_count() int { return self.tile_map_draws.count() }
@@ -3716,6 +3870,19 @@ local func multiplied_color(first:Color, second:Color) Color {
 local func same_color(first:Color, second:Color) bool {
     return first.r == second.r && first.g == second.g &&
         first.b == second.b && first.a == second.a
+}
+
+local func coverage_draws_are_contiguous(
+    first:@CoverageGlyphDraw,
+    second:@CoverageGlyphDraw
+) bool {
+    return first.block_cache < 0 && second.block_cache < 0 &&
+        first.page == second.page && first.layer == second.layer &&
+        first.depth == second.depth && first.viewport == second.viewport &&
+        first.model.x == second.model.x && first.model.y == second.model.y &&
+        first.model.translation == second.model.translation &&
+        first.clip == second.clip &&
+        first.first_instance + first.instance_count == second.first_instance
 }
 
 local func world_image_model(transform:@Transform) Math.Mat4 {
