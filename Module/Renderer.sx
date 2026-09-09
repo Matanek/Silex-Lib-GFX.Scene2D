@@ -441,6 +441,11 @@ package class Renderer {
     private var scene_layer_counts:int[]
     private var scene_layer_positions:int[]
     private var sprite_draws:SpriteDraw[]
+    private var sprite_instance_indices:int[]
+    private var sprite_instance_buffer:GPU.Buffer? = null
+    private var sprite_instance_upload:GPU.TransferBuffer? = null
+    private var sprite_instance_capacity:int
+    private var sprite_instance_packed:str
     private var tile_map_draws:TileMapDraw[]
     private var tile_instances:TileInstance[]
     private var tile_instance_buffer:GPU.Buffer? = null
@@ -544,6 +549,9 @@ package class Renderer {
         self.scene_layer_counts = []
         self.scene_layer_positions = []
         self.sprite_draws = []
+        self.sprite_instance_indices = []
+        self.sprite_instance_capacity = 0
+        self.sprite_instance_packed = "\0"
         self.tile_map_draws = []
         self.tile_instances = []
         self.tile_instance_capacity = 0
@@ -692,18 +700,29 @@ package class Renderer {
 
         var sprite_buffers:GPU.VertexBufferLayout[] = []
         sprite_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:16))
+        sprite_buffers.append(GPU.VertexBufferLayout(
+            slot:1,
+            pitch:80,
+            rate:GPU.VertexRate.instance
+        ))
         var sprite_attributes:GPU.VertexAttribute[] = []
         sprite_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:0))
         sprite_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:8))
+        sprite_attributes.append(GPU.VertexAttribute(location:2, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:0))
+        sprite_attributes.append(GPU.VertexAttribute(location:3, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:8))
+        sprite_attributes.append(GPU.VertexAttribute(location:4, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:16))
+        sprite_attributes.append(GPU.VertexAttribute(location:5, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:32))
+        sprite_attributes.append(GPU.VertexAttribute(location:6, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:48))
+        sprite_attributes.append(GPU.VertexAttribute(location:7, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:64))
         self.sprite_pipeline = device.graphics_pipeline(
-            GPU.ShaderProgram.hlsl(file:"../Shaders/Sprite.hlsl"),
+            GPU.ShaderProgram.hlsl(file:"../Shaders/SpriteBatch.hlsl"),
             GPU.GraphicsPipelineSettings(
                 vertex_buffers:sprite_buffers,
                 attributes:sprite_attributes,
                 rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
                 multisample:GPU.MultisampleState(samples:samples),
                 color_targets:target,
-                name:"GFX.Scene2D drawing text"
+                name:"GFX.Scene2D sprite batch"
             )
         )
         var tile_buffers:GPU.VertexBufferLayout[] = []
@@ -729,11 +748,16 @@ package class Renderer {
                 name:"GFX.Scene2D retained tile map"
             )
         )
+        var surface_buffers:GPU.VertexBufferLayout[] = []
+        surface_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:16))
+        var surface_attributes:GPU.VertexAttribute[] = []
+        surface_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:0))
+        surface_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:8))
         self.surface_pipeline = device.graphics_pipeline(
             GPU.ShaderProgram.hlsl(file:"../Shaders/Sprite.hlsl"),
             GPU.GraphicsPipelineSettings(
-                vertex_buffers:sprite_buffers,
-                attributes:sprite_attributes,
+                vertex_buffers:surface_buffers,
+                attributes:surface_attributes,
                 rasterizer:GPU.RasterizerState(cull:GPU.Cull.none),
                 multisample:GPU.MultisampleState(samples:samples),
                 color_targets:premultiplied_color_target(format),
@@ -850,6 +874,7 @@ package class Renderer {
         self.scene_draws.clear()
         self.image_mask_draws.clear()
         self.sprite_draws.clear()
+        self.sprite_instance_indices.clear()
         self.tile_map_draws.clear()
         self.tile_instances.clear()
         self.surface_draws.clear()
@@ -2215,6 +2240,7 @@ package class Renderer {
         } else {
             self.rebuild_scene_entries()
         }
+        self.prepare_sprite_instances(device)
         self.prepare_scene_instances(device, reordered)
         self.prune_scene_drawing_snapshots()
         self.upload_commands = null
@@ -2299,8 +2325,22 @@ package class Renderer {
                 }
                 cursor = end
             } elif entry.kind == 1 {
-                self.draw_scene_sprite(pass, self.sprite_draws[entry.index])
-                cursor++
+                let draw = self.sprite_draws[entry.index]
+                var end = cursor + 1
+                while end < self.scene_entries.count() {
+                    let next_entry = self.scene_entries[end]
+                    if next_entry.kind != 1 { break }
+                    let next = self.sprite_draws[next_entry.index]
+                    if !sprite_draws_are_compatible(draw, next) { break }
+                    end++
+                }
+                self.draw_scene_sprites(
+                    pass,
+                    draw,
+                    end - cursor,
+                    self.sprite_instance_indices[entry.index]
+                )
+                cursor = end
             } elif entry.kind == 2 {
                 let draw = self.coverage_glyph_draws[entry.index]
                 var instance_count = draw.instance_count
@@ -2406,7 +2446,12 @@ package class Renderer {
         }
     }
 
-    private func draw_scene_sprite(pass:@GPU.RenderPass, draw:SpriteDraw) {
+    private func draw_scene_sprites(
+        pass:@GPU.RenderPass,
+        draw:SpriteDraw,
+        instance_count:int,
+        first_instance:int
+    ) {
         var cache = self.image_cache[draw.cache]
         if let texture = cache.texture {
             if let pipeline = self.sprite_pipeline {
@@ -2414,24 +2459,25 @@ package class Renderer {
                 if draw.sampling == 1 { selected_sampler = self.pixelated_sampler }
                 if let sampler = selected_sampler {
                     if let vertices = self.quad_vertices {
-                        if let indices = self.quad_indices {
-                            var selected_projection = self.scene_view_projection
-                            if draw.viewport { selected_projection = self.projection }
-                            var uniform = Packing.scene_sprite_uniform(
-                                draw.model,
-                                selected_projection,
-                                draw.size,
-                                draw.pivot,
-                                draw.color,
-                                draw.depth,
-                                draw.region
-                            )
-                            pass.bind(pipeline)
-                            pass.vertex_uniform(0, uniform, 256)
-                            pass.fragment_sampler(0, texture, sampler)
-                            pass.vertex_buffer(0, vertices)
-                            pass.index_buffer(indices)
-                            pass.draw_indexed(6)
+                        if let instances = self.sprite_instance_buffer {
+                            if let indices = self.quad_indices {
+                                var selected_projection = self.scene_view_projection
+                                if draw.viewport { selected_projection = self.projection }
+                                var uniform = Packing.view_projection(selected_projection)
+                                pass.bind(pipeline)
+                                pass.vertex_uniform(0, uniform, 64)
+                                pass.fragment_sampler(0, texture, sampler)
+                                pass.vertex_buffer(0, vertices)
+                                pass.vertex_buffer(1, instances)
+                                pass.index_buffer(indices)
+                                pass.draw_indexed(
+                                    6,
+                                    instance_count,
+                                    0,
+                                    0,
+                                    first_instance
+                                )
+                            }
                         }
                     }
                 }
@@ -3413,6 +3459,60 @@ package class Renderer {
         }
     }
 
+    private func prepare_sprite_instances(device:@GPU.Device) {
+        if self.sprite_draws.is_empty() { return }
+        let byte_count = self.sprite_draws.count() * 80
+        var packed = Packing.storage(byte_count)
+        let address = C.address_bits(C.mutable_string_pointer(packed))
+        self.sprite_instance_indices.clear()
+        while self.sprite_instance_indices.count() < self.sprite_draws.count() {
+            self.sprite_instance_indices.append(0)
+        }
+        var instance = 0
+        for entry in self.scene_entries {
+            if entry.kind == 1 {
+                let draw = self.sprite_draws[entry.index]
+                self.sprite_instance_indices[entry.index] = instance
+                Packing.write_sprite_instance(
+                    address,
+                    instance * 80,
+                    draw.model,
+                    draw.size,
+                    draw.pivot,
+                    draw.color,
+                    draw.depth,
+                    draw.region
+                )
+                instance++
+            }
+        }
+        assert(instance == self.sprite_draws.count())
+        if self.sprite_instance_buffer != null && packed == self.sprite_instance_packed {
+            return
+        }
+        if self.sprite_instance_buffer == null || self.sprite_instance_capacity < byte_count {
+            var capacity = 4096
+            while capacity < byte_count { capacity *= 2 }
+            self.sprite_instance_upload = device.upload_buffer(
+                capacity,
+                "GFX.Scene2D sprite instances upload"
+            )
+            self.sprite_instance_buffer = device.buffer(GPU.BufferSettings(
+                size:capacity,
+                usage:GPU.BufferUsage.vertex(),
+                name:"GFX.Scene2D sprite instances"
+            ))
+            self.sprite_instance_capacity = capacity
+        }
+        self.sprite_instance_packed = move packed
+        if let upload = self.sprite_instance_upload {
+            if let destination = self.sprite_instance_buffer {
+                upload.write_packed(self.sprite_instance_packed, byte_count, cycle:true)
+                copy_buffer(device, upload, destination, byte_count)
+            }
+        }
+    }
+
     private func ensure_scene_instance_storage(byte_count:int) {
         if self.drawing_instance_storage_capacity >= byte_count { return }
         var grown = Packing.storage(byte_count)
@@ -3962,6 +4062,12 @@ local func sprite_draw_before(left:@SpriteDraw, right:@SpriteDraw) bool {
     if left.layer != right.layer { return left.layer < right.layer }
     if left.depth != right.depth { return left.depth < right.depth }
     return left.order < right.order
+}
+
+local func sprite_draws_are_compatible(left:@SpriteDraw, right:@SpriteDraw) bool {
+    return left.cache == right.cache &&
+        left.sampling == right.sampling &&
+        left.viewport == right.viewport
 }
 
 local func scene_draw_before_sprite(left:@SceneDraw, right:@SpriteDraw) bool {

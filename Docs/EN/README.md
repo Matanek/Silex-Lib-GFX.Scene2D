@@ -281,7 +281,9 @@ Canvas-local coordinates before evaluating the analytic mask. Rotation and
 non-uniform scale therefore remain instance properties rather than reasons to
 rebuild geometry.
 
-Sprite and text texture identities are indexed directly, so frame preparation
+Adjacent sprites sharing a texture, sampling mode, and scene or viewport space
+are submitted as one instanced draw without changing layer or transparency
+ordering. Sprite and text texture identities are indexed directly, so frame preparation
 remains linear in visible draws. The vector cache retains at most 2,048 glyph
 meshes and 256 prepared layers. After warm-up, static vector text performs no
 new shaping, decomposition, tessellation, rasterization, or pixel upload; the

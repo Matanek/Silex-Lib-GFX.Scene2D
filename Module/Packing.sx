@@ -247,6 +247,34 @@ func write_tile_instance(
     write_vec4(address, offset + 8, region)
 }
 
+func write_sprite_instance(
+    address:uint,
+    offset:int,
+    model:Math.Mat4,
+    size:Math.Vec2,
+    pivot:Math.Vec2,
+    color:Color,
+    depth:float,
+    region:Math.Vec4
+) {
+    write_vec2(address, offset, Math.Vec2(model.x.x, model.x.y))
+    write_vec2(address, offset + 8, Math.Vec2(model.y.x, model.y.y))
+    write_vec4(address, offset + 16, Math.Vec4(
+        model.w.x,
+        model.w.y,
+        depth,
+        0.0
+    ))
+    write_vec4(address, offset + 32, Math.Vec4(
+        size.x,
+        size.y,
+        pivot.x,
+        pivot.y
+    ))
+    write_color(address, offset + 48, color)
+    write_vec4(address, offset + 64, region)
+}
+
 func canvas_effect_uniform(
     width:int,
     height:int,

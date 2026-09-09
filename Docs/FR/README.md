@@ -293,7 +293,10 @@ shader applique `fit` ou `tile` dans les coordonnées locales du Canvas, puis
 évalue le masque analytique. Rotation et échelle non uniforme restent ainsi
 des propriétés de l'instance, pas une raison de reconstruire la géométrie.
 
-Les identités de textures de sprites et de textes sont indexées directement ;
+Les sprites adjacents qui partagent une texture, un mode d’échantillonnage et
+un espace scène ou viewport sont envoyés en un seul draw instancié, sans
+modifier l’ordre des couches et de la transparence. Les identités de textures
+de sprites et de textes sont indexées directement ;
 la préparation d’une frame reste linéaire selon les dessins visibles. Le cache
 vectoriel garde au plus 2 048 meshes de glyphes et 256 couches préparées. Après
 warm-up, un texte vectoriel statique ne refaçonne, ne décompose, ne tesselle,
