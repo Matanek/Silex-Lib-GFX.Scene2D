@@ -412,6 +412,7 @@ package class Renderer {
     private var surface_content_revision:int
     private var surface_content_canvas:SceneCanvas
     private var synchronized_authored_canvases:Dictionary<int, int>
+    private var last_synchronized_authored_id:int = -1
     private var last_scene_snapshot_id:int
     private var last_scene_cache_index:int
     private var last_synchronized_scene_snapshot_id:int
@@ -861,6 +862,7 @@ package class Renderer {
         self.upload_commands = upload_commands
         self.canvas_synchronizations = 0
         self.synchronized_authored_canvases.clear()
+        self.last_synchronized_authored_id = -1
         self.display_scale = display_scale
         self.viewport = viewport
         self.projection = Math.Mat4.orthographic(
@@ -2668,6 +2670,8 @@ package class Renderer {
 
     private func synchronize_scene_canvas(canvas:@SceneCanvas) {
         let authored_id = canvas.authored_id()
+        if authored_id == self.last_synchronized_authored_id { return }
+        self.last_synchronized_authored_id = authored_id
         if self.synchronized_authored_canvases.contains(authored_id) { return }
         canvas.synchronize_retained()
         self.synchronized_authored_canvases.set(authored_id, 1)
