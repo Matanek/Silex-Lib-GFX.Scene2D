@@ -492,6 +492,12 @@ package class Renderer {
     private var drawing_instance_scratch:str
     private var drawing_instance_storage_capacity:int
     private var drawing_instance_write_address:uint
+    private var shadow_instance_packed:str = ""
+    private var shadow_instance_scratch:str = ""
+    private var shadow_instance_storage_capacity:int = 0
+    private var shadow_instance_write_address:uint = 0
+    private var has_shadow_instances:bool = false
+    private var drawing_instance_uploaded_bytes:int = 0
     private var upload_commands:GPU.CommandBuffer? = null
     private var projection:Math.Mat4
     private var scene_view_projection:Math.Mat4
@@ -628,7 +634,7 @@ package class Renderer {
         drawing_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:36))
         drawing_buffers.append(GPU.VertexBufferLayout(
             slot:1,
-            pitch:80,
+            pitch:48,
             rate:GPU.VertexRate.instance
         ))
         var drawing_attributes:GPU.VertexAttribute[] = []
@@ -668,9 +674,16 @@ package class Renderer {
         shadow_buffers.append(GPU.VertexBufferLayout(slot:0, pitch:60))
         shadow_buffers.append(GPU.VertexBufferLayout(
             slot:1,
-            pitch:80,
+            pitch:48,
             rate:GPU.VertexRate.instance
         ))
+        shadow_buffers.append(GPU.VertexBufferLayout(
+            slot:2,
+            pitch:32,
+            rate:GPU.VertexRate.instance
+        ))
+        // Shadow parameters follow the compact affine stream in the same GPU
+        // buffer. Frames without shadows never pack or upload this extension.
         var shadow_attributes:GPU.VertexAttribute[] = []
         shadow_attributes.append(GPU.VertexAttribute(location:0, buffer_slot:0, format:GPU.VertexFormat.float_32x3, offset:0))
         shadow_attributes.append(GPU.VertexAttribute(location:1, buffer_slot:0, format:GPU.VertexFormat.float_32x3, offset:12))
@@ -684,9 +697,9 @@ package class Renderer {
         shadow_attributes.append(GPU.VertexAttribute(location:9, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:36))
         shadow_attributes.append(GPU.VertexAttribute(location:10, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:44))
         shadow_attributes.append(GPU.VertexAttribute(location:11, buffer_slot:0, format:GPU.VertexFormat.float_32x2, offset:52))
-        shadow_attributes.append(GPU.VertexAttribute(location:12, buffer_slot:1, format:GPU.VertexFormat.float_32x2, offset:48))
-        shadow_attributes.append(GPU.VertexAttribute(location:13, buffer_slot:1, format:GPU.VertexFormat.float_32, offset:56))
-        shadow_attributes.append(GPU.VertexAttribute(location:14, buffer_slot:1, format:GPU.VertexFormat.float_32x4, offset:64))
+        shadow_attributes.append(GPU.VertexAttribute(location:12, buffer_slot:2, format:GPU.VertexFormat.float_32x2, offset:0))
+        shadow_attributes.append(GPU.VertexAttribute(location:13, buffer_slot:2, format:GPU.VertexFormat.float_32, offset:8))
+        shadow_attributes.append(GPU.VertexAttribute(location:14, buffer_slot:2, format:GPU.VertexFormat.float_32x4, offset:16))
         self.shadow_pipeline = device.graphics_pipeline(
             GPU.ShaderProgram.hlsl(file:"../Shaders/AnalyticShadow.hlsl"),
             GPU.GraphicsPipelineSettings(
@@ -887,8 +900,17 @@ package class Renderer {
         self.pending_coverage_uploads.clear()
         self.coverage_upload_offset = 0
         self.vector_instances = 0
+        self.has_shadow_instances = false
+        self.drawing_instance_uploaded_bytes = 0
+        self.shadow_instance_write_address = 0
+        if self.shadow_instance_storage_capacity >= 32 {
+            var bytes = self.shadow_instance_packed
+            let address = C.address_bits(C.mutable_string_pointer(bytes))
+            self.shadow_instance_packed = bytes
+            self.shadow_instance_write_address = address
+        }
         self.drawing_instance_write_address = 0
-        if self.drawing_instance_storage_capacity >= 80 {
+        if self.drawing_instance_storage_capacity >= 48 {
             var bytes = self.drawing_instance_packed
             let address = C.address_bits(C.mutable_string_pointer(bytes))
             self.drawing_instance_packed = bytes
@@ -967,7 +989,7 @@ package class Renderer {
         var cache = self.scene_drawing_cache[cache_index]
         let model = canvas.affine_model(transform, self.viewport)
         let draw_index = self.scene_draws.count()
-        self.ensure_scene_instance_storage((draw_index + 1) * 80)
+        self.ensure_scene_instance_storage((draw_index + 1) * 48)
         self.scene_draws.append(SceneDraw(
             kind:0,
             cache:cache_index,
@@ -979,7 +1001,7 @@ package class Renderer {
         ))
         Packing.write_affine_instance(
             self.drawing_instance_write_address,
-            draw_index * 80,
+            draw_index * 48,
             model.x,
             model.y,
             model.translation,
@@ -1152,7 +1174,7 @@ package class Renderer {
             shadow.geometry
         )
         let draw_index = self.scene_draws.count()
-        self.ensure_scene_instance_storage((draw_index + 1) * 80)
+        self.ensure_scene_instance_storage((draw_index + 1) * 48)
         self.scene_draws.append(SceneDraw(
             kind:3,
             cache:cache_index,
@@ -1162,9 +1184,13 @@ package class Renderer {
             order:entity.index * 2048 + order,
             viewport:canvas.uses_viewport()
         ))
+        self.ensure_shadow_instance_storage((draw_index + 1) * 32)
+        self.has_shadow_instances = true
         Packing.write_shadow_instance(
             self.drawing_instance_write_address,
-            draw_index * 80,
+            draw_index * 48,
+            self.shadow_instance_write_address,
+            draw_index * 32,
             model.x,
             model.y,
             model.translation,
@@ -1225,7 +1251,7 @@ package class Renderer {
         order:int
     ) {
         let draw_index = self.scene_draws.count()
-        self.ensure_scene_instance_storage((draw_index + 1) * 80)
+        self.ensure_scene_instance_storage((draw_index + 1) * 48)
         self.scene_draws.append(SceneDraw(
             kind:kind,
             cache:cache,
@@ -1237,7 +1263,7 @@ package class Renderer {
         ))
         Packing.write_affine_instance(
             self.drawing_instance_write_address,
-            draw_index * 80,
+            draw_index * 48,
             model.x,
             model.y,
             model.translation,
@@ -1914,7 +1940,7 @@ package class Renderer {
                 }
                 let model = composed_affine(authored, glyph)
                 let draw_index = self.scene_draws.count()
-                self.ensure_scene_instance_storage((draw_index + 1) * 80)
+                self.ensure_scene_instance_storage((draw_index + 1) * 48)
                 self.scene_draws.append(SceneDraw(
                     kind:1,
                     cache:glyph.cache,
@@ -1926,7 +1952,7 @@ package class Renderer {
                 ))
                 Packing.write_affine_instance(
                     self.drawing_instance_write_address,
-                    draw_index * 80,
+                    draw_index * 48,
                     model.x,
                     model.y,
                     model.translation,
@@ -2315,6 +2341,9 @@ package class Renderer {
                                 pass.vertex_uniform(0, projection, 64)
                                 pass.vertex_buffer(0, vertices)
                                 pass.vertex_buffer(1, instances)
+                                if draw.kind == 3 {
+                                    pass.vertex_buffer(2, instances, self.scene_draws.count() * 48)
+                                }
                                 pass.draw(
                                     cache.vertex_count,
                                     end - cursor,
@@ -2400,6 +2429,9 @@ package class Renderer {
                             pass.vertex_uniform(0, projection, 64)
                             pass.vertex_buffer(0, vertices)
                             pass.vertex_buffer(1, instances)
+                            if draw.kind == 3 {
+                                pass.vertex_buffer(2, instances, self.scene_draws.count() * 48)
+                            }
                             pass.draw(cache.vertex_count, end - cursor, 0, cursor)
                         }
                     }
@@ -3159,6 +3191,9 @@ package class Renderer {
     package func vector_outline_cache_hit_count() int { return self.outline_cache_hits }
     package func vector_tessellation_count() int { return self.glyph_tessellations }
     package func vector_instance_count() int { return self.vector_instances }
+    package func drawing_instance_upload_bytes() int {
+        return self.drawing_instance_uploaded_bytes
+    }
     package func coverage_raster_count() int { return self.coverage_rasters }
     package func text_uploaded_pixel_count() int { return self.text_pixels_uploaded }
     package func coverage_atlas_page_count() int {
@@ -3533,6 +3568,45 @@ package class Renderer {
         self.drawing_instance_write_address = destination
     }
 
+    private func ensure_shadow_instance_storage(byte_count:int) {
+        if self.shadow_instance_storage_capacity >= byte_count { return }
+        var grown = Packing.storage(byte_count)
+        let destination = C.address_bits(C.mutable_string_pointer(grown))
+        if self.shadow_instance_write_address != 0 {
+            Packing.copy_instance_bytes(
+                destination, 0, self.shadow_instance_write_address, 0,
+                self.shadow_instance_storage_capacity
+            )
+        }
+        self.shadow_instance_packed = grown
+        self.shadow_instance_storage_capacity = C.byte_count(grown) as int
+        self.shadow_instance_write_address = destination
+    }
+
+    private func reorder_shadow_instances() {
+        let byte_count = self.scene_draws.count() * 32
+        var reordered = self.shadow_instance_scratch
+        if C.byte_count(reordered) < byte_count as uint {
+            reordered = Packing.storage(byte_count)
+        }
+        let destination = C.address_bits(C.mutable_string_pointer(reordered))
+        var index = 0
+        while index < self.scene_draws.count() {
+            let draw = self.scene_draws[index]
+            if draw.kind == 3 {
+                Packing.copy_instance_bytes(
+                    destination, index * 32,
+                    self.shadow_instance_write_address, draw.instance * 32, 32
+                )
+            }
+            index++
+        }
+        self.shadow_instance_scratch = self.shadow_instance_packed
+        self.shadow_instance_packed = reordered
+        self.shadow_instance_storage_capacity = C.byte_count(reordered) as int
+        self.shadow_instance_write_address = destination
+    }
+
     private func reorder_scene_instances(byte_count:int) {
         var reordered = self.drawing_instance_scratch
         if C.byte_count(reordered) < byte_count as uint {
@@ -3543,9 +3617,9 @@ package class Renderer {
         while index < self.scene_draws.count() {
             Packing.copy_affine_instance(
                 destination,
-                index * 80,
+                index * 48,
                 self.drawing_instance_write_address,
-                self.scene_draws[index].instance * 80
+                self.scene_draws[index].instance * 48
             )
             index++
         }
@@ -3557,8 +3631,15 @@ package class Renderer {
 
     private func prepare_scene_instances(device:@GPU.Device, reordered:bool) {
         if self.scene_draws.count() == 0 { return }
-        let byte_count = self.scene_draws.count() * 80
-        if reordered { self.reorder_scene_instances(byte_count) }
+        let drawing_bytes = self.scene_draws.count() * 48
+        var shadow_bytes = 0
+        if self.has_shadow_instances {
+            shadow_bytes = self.scene_draws.count() * 32
+            self.ensure_shadow_instance_storage(shadow_bytes)
+            if reordered { self.reorder_shadow_instances() }
+        }
+        let byte_count = drawing_bytes + shadow_bytes
+        if reordered { self.reorder_scene_instances(drawing_bytes) }
         if self.drawing_instances == null || self.drawing_instance_capacity < byte_count {
             self.drawing_instance_upload = device.upload_buffer(
                 byte_count,
@@ -3575,8 +3656,15 @@ package class Renderer {
         self.drawing_instance_packed = bytes
         if let upload = self.drawing_instance_upload {
             if let destination = self.drawing_instances {
-                upload.write_packed(bytes, byte_count, cycle:true)
+                upload.write_packed(bytes, drawing_bytes, cycle:true)
+                if shadow_bytes > 0 {
+                    upload.write_packed(
+                        self.shadow_instance_packed, shadow_bytes,
+                        offset:drawing_bytes
+                    )
+                }
                 copy_buffer(device, upload, destination, byte_count)
+                self.drawing_instance_uploaded_bytes = byte_count
             }
         }
     }

@@ -1,0 +1,124 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.ECS
+use GFX.GPU
+use GFX.Scene2D
+use GFX.Scene2D.Canvas as SceneCanvas
+use GFX.Scene2D.Renderer
+use STD.Math
+
+func instance_drawing(shadow:bool) Canvas {
+    var drawing = Canvas()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        if shadow {
+            painter.layer(
+                [Canvas.Effect.shadow(Math.Vec2(3.0, 2.0), 3.0, Color.black())],
+                func(layer:&Canvas.Painter) {
+                    layer.fill(
+                        Canvas.Rect(Math.Vec2(4.0), Math.Vec2(12.0)),
+                        Canvas.Fill.solid(Color.cyan_400())
+                    )
+                }
+            )
+        } else {
+            painter.fill(
+                Canvas.Rect(Math.Vec2(4.0), Math.Vec2(12.0)),
+                Canvas.Fill.solid(Color.amber_400())
+            )
+        }
+    })
+    return drawing
+}
+
+func render_instances(
+    device:GPU.Device,
+    renderer:Renderer,
+    surfaces:&Scene2D.CanvasSurfaceRenderer,
+    entities:@ECS.Entity[],
+    canvases:@SceneCanvas[],
+    reverse:bool
+) uint8[] {
+    renderer.begin_prepare(Math.Vec2(96.0), 1.0)
+    var index = 0
+    while index < canvases.count() {
+        var selected = index
+        if reverse { selected = canvases.count() - index - 1 }
+        var transform = Scene2D.Transform(position:Math.Vec2(
+            (selected % 4) as float * 20.0,
+            (selected / 4) as float * 20.0
+        ))
+        var canvas = canvases[selected]
+        renderer.collect_canvas(device, entities[selected], transform, canvas, surfaces)
+        index++
+    }
+    renderer.finish_prepare(device)
+    var target = device.texture(GPU.TextureSettings(
+        format:GPU.TextureFormat.rgba8_unorm,
+        width:96,
+        height:96,
+        usage:GPU.TextureUsage.as_color_target()
+    ))
+    var download = device.download_buffer(96 * 96 * 4)
+    var commands = device.commands()
+    var pass = commands.render(GPU.ColorTarget(texture:target, clear:Color.white()))
+    renderer.draw(pass)
+    pass.finish()
+    var transfer = commands.copy()
+    transfer.download(GPU.TextureRegion(texture:target, width:96, height:96), download, 96, 96)
+    transfer.finish()
+    var completed = commands.submit_and_track()
+    completed.wait()
+    return download.read()
+}
+
+func same_pixels(first:@uint8[], second:@uint8[]) bool {
+    if first.count() != second.count() { return false }
+    var index = 0
+    while index < first.count() {
+        if first[index] != second[index] { return false }
+        index++
+    }
+    return true
+}
+
+test "preserve mixed drawing instances through growth sorting and shadow removal" {
+    var device = GPU.Device(GPU.DeviceSettings(debug:true))
+    var renderer = Renderer()
+    renderer.start_offscreen(device, GPU.TextureFormat.rgba8_unorm)
+    var surfaces = Scene2D.CanvasSurfaceRenderer(device)
+    var world = ECS.World()
+    var entities:ECS.Entity[] = []
+    var plain:SceneCanvas[] = []
+    var mixed:SceneCanvas[] = []
+    var flat = instance_drawing(false)
+    var shadow = instance_drawing(true)
+    var index = 0
+    while index < 16 {
+        entities.append(world.spawn(ECS.EntityRecipe()))
+        var canvas = SceneCanvas(flat)
+        canvas.space = Scene2D.CanvasSpace.viewport
+        canvas.layer = index
+        plain.append(canvas)
+        if index % 3 == 1 { canvas = SceneCanvas(shadow) }
+        canvas.space = Scene2D.CanvasSpace.viewport
+        canvas.layer = index
+        mixed.append(canvas)
+        index++
+    }
+    let plain_pixels = render_instances(device, renderer, surfaces, entities, plain, false)
+    assert(renderer.drawing_instance_upload_bytes() == 16 * 48)
+    assert(plain_pixels[(10 * 96 + 10) * 4 + 2] < 255 as uint8)
+    let mixed_pixels = render_instances(device, renderer, surfaces, entities, mixed, false)
+    assert(renderer.drawing_instance_upload_bytes() == 16 * 80)
+    assert(!same_pixels(mixed_pixels, plain_pixels))
+    assert(mixed_pixels[(10 * 96 + 30) * 4 + 2] >
+        plain_pixels[(10 * 96 + 30) * 4 + 2])
+    assert(mixed_pixels[(10 * 96 + 38) * 4] <
+        plain_pixels[(10 * 96 + 38) * 4])
+    let reordered = render_instances(device, renderer, surfaces, entities, mixed, true)
+    assert(same_pixels(reordered, mixed_pixels))
+    assert(renderer.drawing_instance_upload_bytes() == 16 * 80)
+    let restored = render_instances(device, renderer, surfaces, entities, plain, true)
+    assert(same_pixels(restored, plain_pixels))
+    assert(renderer.drawing_instance_upload_bytes() == 16 * 48)
+}

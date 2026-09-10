@@ -26,7 +26,7 @@ func drawing_vertices(mesh:@Geometry.Mesh) str {
 }
 
 func drawing_instance(model:Math.Mat4, color:Color) str {
-    var bytes = storage(80)
+    var bytes = storage(48)
     let address = C.address_bits(C.mutable_string_pointer(bytes))
     write_affine_instance(
         address,
@@ -456,15 +456,13 @@ func write_affine_instance(
     write_float(address, offset + 24, depth)
     write_float(address, offset + 28, 0.0)
     write_color(address, offset + 32, color)
-    write_vec2(address, offset + 48, Math.Vec2())
-    write_float(address, offset + 56, 0.0)
-    write_float(address, offset + 60, 0.0)
-    write_color(address, offset + 64, Color.transparent())
 }
 
 func write_shadow_instance(
     address:uint,
     offset:int,
+    shadow_address:uint,
+    shadow_offset_bytes:int,
     model_x:Math.Vec2,
     model_y:Math.Vec2,
     translation:Math.Vec2,
@@ -483,9 +481,10 @@ func write_shadow_instance(
         depth,
         color
     )
-    write_vec2(address, offset + 48, shadow_offset)
-    write_float(address, offset + 56, shadow_radius)
-    write_color(address, offset + 64, shadow_color)
+    write_vec2(shadow_address, shadow_offset_bytes, shadow_offset)
+    write_float(shadow_address, shadow_offset_bytes + 8, shadow_radius)
+    write_float(shadow_address, shadow_offset_bytes + 12, 0.0)
+    write_color(shadow_address, shadow_offset_bytes + 16, shadow_color)
 }
 
 func copy_affine_instance(
@@ -494,8 +493,18 @@ func copy_affine_instance(
     source:uint,
     source_offset:int
 ) {
+    copy_instance_bytes(destination, destination_offset, source, source_offset, 48)
+}
+
+func copy_instance_bytes(
+    destination:uint,
+    destination_offset:int,
+    source:uint,
+    source_offset:int,
+    byte_count:int
+) {
     var byte_offset = 0
-    while byte_offset < 80 {
+    while byte_offset < byte_count {
         let value = C.load<uint64>(source, (source_offset + byte_offset) as uint)
         let stored = C.store<uint64>(
             destination,
@@ -509,7 +518,7 @@ func copy_affine_instance(
 func copy_affine_instances(destination:uint, source:uint, count:int) {
     var index = 0
     while index < count {
-        copy_affine_instance(destination, index * 80, source, index * 80)
+        copy_affine_instance(destination, index * 48, source, index * 48)
         index++
     }
 }
