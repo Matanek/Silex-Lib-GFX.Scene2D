@@ -162,8 +162,11 @@ Canvas text keeps `CanvasTextMode.coverage` by default. This path rasterizes
 each glyph shaped by `GFX.Font` with hinting on first use, stores it in an R8
 GPU atlas, then draws visible occurrences as instanced quads. A cold scroll no
 longer recomposes one RGBA texture per line. It suits small sizes, terminals,
-and dense interfaces. `coverage_density` multiplies the window's physical
-density and must remain strictly positive:
+and dense interfaces. Raster density accounts for the window's physical density,
+Canvas resizing and its scale projected through the camera. Viewport text ignores
+the camera. Translation keeps the same density and reuses cached glyphs.
+`coverage_density` multiplies this computed density and must remain strictly
+positive:
 
 ```sx
 var label = Components.Canvas(drawing, 320, 80)

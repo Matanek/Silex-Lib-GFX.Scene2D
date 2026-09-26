@@ -1344,10 +1344,7 @@ package class Renderer {
         layer:TextLayer,
         order:int
     ) {
-        if canvas.coverage_density <= 0.0 {
-            panic("GFX.Scene2D Canvas coverage_density must be positive")
-        }
-        let density = self.display_scale * canvas.coverage_density
+        let density = self.canvas_text_density(transform, canvas)
         if self.collect_atlas_coverage_text(
             device,
             entity,
@@ -1389,6 +1386,25 @@ package class Renderer {
             order:order,
             viewport:canvas.uses_viewport()
         ))
+    }
+
+    // Rasterize at the projected size, including Canvas resizing and camera zoom.
+    // Translation does not affect density, so scrolling preserves the glyph cache.
+    package func canvas_text_density(transform:@Transform, canvas:@SceneCanvas) float {
+        if canvas.coverage_density <= 0.0 {
+            panic("GFX.Scene2D Canvas coverage_density must be positive")
+        }
+        let model = canvas.affine_model(transform, self.viewport)
+        var x = model.x
+        var y = model.y
+        if !canvas.uses_viewport() {
+            let projected_x = self.scene_view_projection.multiply(Math.Vec4(x.x, x.y, 0.0, 0.0))
+            let projected_y = self.scene_view_projection.multiply(Math.Vec4(y.x, y.y, 0.0, 0.0))
+            x = Math.Vec2(projected_x.x * self.viewport.x * 0.5, projected_x.y * self.viewport.y * 0.5)
+            y = Math.Vec2(projected_y.x * self.viewport.x * 0.5, projected_y.y * self.viewport.y * 0.5)
+        }
+        let scale = Math.max(Math.sqrt(x.length_squared()), Math.sqrt(y.length_squared()))
+        return Math.max(0.25, scale * self.display_scale) * canvas.coverage_density
     }
 
     private func collect_atlas_coverage_text(

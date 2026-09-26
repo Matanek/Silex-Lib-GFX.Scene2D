@@ -169,8 +169,11 @@ rastérise avec hinting chaque glyphe façonné par `GFX.Font` lors de son premi
 emploi, le range dans un atlas R8 GPU, puis dessine les occurrences visibles
 comme quads instanciés. Un scroll froid ne recompose donc plus une texture RGBA
 par ligne. Il convient aux petites tailles, aux terminaux et aux interfaces
-denses. `coverage_density` multiplie la densité physique de la fenêtre et doit
-rester strictement positif :
+denses. La densité de rastérisation tient compte de la densité physique de la
+fenêtre, du redimensionnement du Canvas et de son échelle projetée par la caméra.
+Le texte en espace viewport ignore la caméra. Une translation conserve la même
+densité et réutilise les glyphes en cache. `coverage_density` multiplie cette
+densité calculée et doit rester strictement positif :
 
 ```sx
 var label = Components.Canvas(drawing, 320, 80)

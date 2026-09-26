@@ -1,0 +1,37 @@
+use GFX.Canvas.Canvas as AuthoredCanvas
+use GFX.Scene2D.Camera
+use GFX.Scene2D.Canvas as SceneCanvas
+use GFX.Scene2D.Canvas.Space
+use GFX.Scene2D.Renderer
+use GFX.Scene2D.Transform
+use STD.Math
+
+test "coverage follows camera zoom and display density without depending on translation" {
+    var renderer = Renderer()
+    renderer.begin_prepare(Math.Vec2(960.0, 540.0), 2.0)
+    var canvas = SceneCanvas(AuthoredCanvas())
+    var transform = Transform()
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 2.0) < 0.0001)
+    renderer.consider_camera(Transform(), Camera(zoom:3.0))
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 6.0) < 0.0001)
+    transform.position = Math.Vec2(1234.0, -567.0)
+    renderer.consider_camera(Transform(position:Math.Vec2(200.0, 300.0)), Camera(zoom:3.0, order:-1))
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 6.0) < 0.0001)
+    canvas.space = Space.viewport
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 2.0) < 0.0001)
+}
+
+test "coverage includes resized Canvas axes, reflection, rotation and explicit density" {
+    var renderer = Renderer()
+    renderer.begin_prepare(Math.Vec2(960.0, 540.0), 2.0)
+    var canvas = SceneCanvas(AuthoredCanvas(), 100, 40)
+    canvas.size = Math.Vec2(200.0, 120.0)
+    let transform = Transform(rotation:0.4, scale:Math.Vec2(-2.0, 1.0))
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 8.0) < 0.0001)
+    canvas.coverage_density = 1.5
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 12.0) < 0.0001)
+    renderer.consider_camera(Transform(), Camera(viewport_size:Math.Vec2(480.0, 270.0)))
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 24.0) < 0.0001)
+    canvas.space = Space.viewport
+    assert(Math.abs(renderer.canvas_text_density(transform, canvas) - 12.0) < 0.0001)
+}
