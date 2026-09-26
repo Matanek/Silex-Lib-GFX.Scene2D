@@ -86,6 +86,11 @@ upload that buffer again. `color`, `layer`, `depth`, `visible`, and
 `sampling(...)` configure placement as they do for a sprite. Sampling defaults
 to `Sampling.pixelated`.
 
+Sprites and tilemap cells clamp texture lookups to the pixel centers within
+their atlas region. Neighboring cells therefore cannot bleed across edges,
+including with fractional camera positions, multisampling and `Sampling.smooth`.
+Placement and pixel size remain unchanged.
+
 `coordinate_at(point)` converts a local point to `TileCoordinate?`, while
 `cell_origin(column, row)` returns a cell's local origin. Out-of-grid input
 returns `null` for hit testing and fails explicitly for `tile`, `set`, `clear`,

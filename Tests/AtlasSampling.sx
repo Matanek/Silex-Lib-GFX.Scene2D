@@ -1,0 +1,85 @@
+use GFX.Assets.Image
+use GFX.Color
+use GFX.ECS
+use GFX.GPU
+use GFX.Scene2D
+use GFX.Scene2D.Renderer
+use STD.Math
+
+// Red cell surrounded by green cells: any green output is an atlas leak.
+func atlas_image() Image {
+    var pixels:uint8[] = []
+    for y in 0...6 {
+        for x in 0...6 {
+            let selected = x >= 2 && x < 4 && y >= 2 && y < 4
+            if selected { pixels.append(255 as uint8); pixels.append(0 as uint8) }
+            else { pixels.append(0 as uint8); pixels.append(255 as uint8) }
+            pixels.append(0 as uint8)
+            pixels.append(255 as uint8)
+        }
+    }
+    return Image.rgba8(6, 6, pixels)
+}
+
+test "fractional camera positions cannot sample neighboring atlas cells" {
+    // A device and textures only: this test never creates a window.
+    var device = GPU.Device()
+    assert(device.supports(GPU.TextureFormat.rgba8_unorm, GPU.Samples.four))
+    var renderer = Renderer()
+    renderer.start_offscreen(device, GPU.TextureFormat.rgba8_unorm, GPU.Samples.four)
+    var images = Image.Store()
+    let image = images.add(atlas_image())
+    var world = ECS.World()
+    let sprite_entity = world.spawn(ECS.EntityRecipe())
+    let tile_entity = world.spawn(ECS.EntityRecipe())
+    var sprite = Scene2D.Sprite(image:image, size:Math.Vec2(2.0))
+    sprite.region(Image.Region(2, 2, 2, 2))
+    var tiles = Scene2D.TileMap(Scene2D.TileAtlas(image, 2, 2), 1, 1)
+    tiles.set(0, 0, 4)
+    var target = device.texture(GPU.TextureSettings(
+        format:GPU.TextureFormat.rgba8_unorm, width:64, height:64,
+        usage:GPU.TextureUsage.as_color_target(), samples:GPU.Samples.four))
+    var resolved = device.texture(GPU.TextureSettings(
+        format:GPU.TextureFormat.rgba8_unorm, width:64, height:64,
+        usage:GPU.TextureUsage.as_color_target()))
+    var download = device.download_buffer(64 * 64 * 4)
+    let modes:Scene2D.Sampling[] = [Scene2D.Sampling.pixelated, Scene2D.Sampling.smooth]
+    for sampling in modes {
+        sprite.sampling(sampling)
+        tiles.sampling(sampling)
+        for frame in 0...8 {
+            renderer.begin_prepare(Math.Vec2(64.0), 1.0)
+            renderer.consider_camera(
+                Scene2D.Transform(position:Math.Vec2(frame as float / 48.0)),
+                Scene2D.Camera(zoom:6.0))
+            renderer.collect_sprite(device, sprite_entity,
+                Scene2D.Transform(position:Math.Vec2(-2.0, 0.0)), sprite, images)
+            renderer.collect_tile_map(device, tile_entity,
+                Scene2D.Transform(position:Math.Vec2(1.0, -1.0)), tiles, images)
+            renderer.finish_prepare(device)
+            var commands = device.commands()
+            var pass = commands.render(GPU.ColorTarget(texture:target,
+                clear:Color.black(), store:GPU.Store.resolve, resolve:resolved))
+            renderer.draw(pass)
+            pass.finish()
+            var transfer = commands.copy()
+            transfer.download(GPU.TextureRegion(texture:resolved, width:64, height:64), download, 64, 64)
+            transfer.finish()
+            var complete = commands.submit_and_track()
+            complete.wait()
+            let pixels = download.read()
+            var sprite_red = 0
+            var tile_red = 0
+            var green = 0
+            for pixel in 0...4096 {
+                if pixel % 64 < 32 { sprite_red += pixels[pixel * 4] as int }
+                else { tile_red += pixels[pixel * 4] as int }
+                green += pixels[pixel * 4 + 1] as int
+            }
+            if green > 0 { print("atlas leak: frame $(frame), green $(green)") }
+            assert(sprite_red > 1000 && tile_red > 1000)
+            assert(green == 0)
+        }
+    }
+    device.wait_until_idle()
+}

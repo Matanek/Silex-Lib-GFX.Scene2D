@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed atlas pixels leaking between sprite and tilemap regions during fractional camera movement. Shaders clamp lookups to the selected region without shrinking UVs; an offscreen GPU regression covers 4× MSAA and both sampling modes.
+
 - Fixed coverage text density to account for camera zoom, Canvas scale and resizing, avoiding enlargement of glyphs rasterized at too small a size.
 
 - Added TilePatch for nine-tile surfaces and distinct content revisions across maps and copies. Cache visible CPU instances by content, visible range and atlas dimensions, with GPU tests for scrolling and edits.

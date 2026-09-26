@@ -18,6 +18,7 @@ SamplerState spriteSampler : register(s0, space2);
 
 struct VertexOutput {
     float2 uv : TEXCOORD0;
+    nointerpolation float4 uvRegion : TEXCOORD1;
     float4 color : COLOR0;
     float4 position : SV_Position;
 };
@@ -32,10 +33,20 @@ VertexOutput vertex_main(VertexInput input) {
         float4(world, input.translationDepth.z, 1.0)
     );
     output.uv = input.uvRegion.xy + input.uv * input.uvRegion.zw;
+    output.uvRegion = input.uvRegion;
     output.color = input.tint;
     return output;
 }
 
 float4 fragment_main(VertexOutput input) : SV_Target0 {
-    return spriteTexture.Sample(spriteSampler, input.uv) * input.color;
+    // MSAA can shade a pixel whose center lies outside the covered triangle.
+    // Clamp the lookup, not the UV mapping, to keep every atlas texel its size.
+    uint width;
+    uint height;
+    spriteTexture.GetDimensions(width, height);
+    const float2 halfTexel = 0.5 / float2(width, height);
+    const float2 lower = input.uvRegion.xy + halfTexel;
+    const float2 upper = input.uvRegion.xy + input.uvRegion.zw - halfTexel;
+    const float2 uv = clamp(input.uv, lower, upper);
+    return spriteTexture.Sample(spriteSampler, uv) * input.color;
 }

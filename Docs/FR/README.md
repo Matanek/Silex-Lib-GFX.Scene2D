@@ -91,6 +91,11 @@ buffer. `color`, `layer`, `depth`, `visible` et `sampling(...)` règlent le
 placement comme pour un sprite. Le mode d’échantillonnage initial est
 `Sampling.pixelated`.
 
+Les sprites et les cellules de tilemap limitent leurs lectures aux centres des
+pixels de leur région d’atlas. Les cellules voisines ne débordent ainsi pas sur
+les bords, y compris avec une caméra fractionnaire, le multisampling et
+`Sampling.smooth`. Le placement et la taille des pixels restent inchangés.
+
 `coordinate_at(point)` convertit un point local en `TileCoordinate?`, tandis
 que `cell_origin(column, row)` retourne l’origine locale d’une cellule. Une
 coordonnée hors grille renvoie `null` pour le hit-test et provoque une erreur
