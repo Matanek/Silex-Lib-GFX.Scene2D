@@ -10,7 +10,7 @@ use GFX.Scene2D.Transform
 use GFX.Window.Plugin as WindowPlugin
 use STD.Math
 
-struct TileFrame { var value:int }
+struct TileFrame { var value:int; var map:ECS.Entity?; var camera:ECS.Entity? }
 
 func two_tile_image() Image {
     var pixels:uint8[] = []
@@ -28,16 +28,16 @@ func two_tile_image() Image {
     return Image.rgba8(8, 4, pixels)
 }
 
-func create_tile_field(world:&ECS.World, images:&Image.Store) {
+func create_tile_field(world:&ECS.World, images:&Image.Store, frames:&TileFrame) {
     let atlas = Scene2D.TileAtlas(images.add(two_tile_image()), 4, 4)
     var tiles = Scene2D.TileMap(atlas, 256, 256)
     tiles.fill(0)
-    world.spawn(ECS.EntityRecipe()
+    frames.map = world.spawn(ECS.EntityRecipe()
         ..with(Scene2D.Transform(position:Math.Vec2(-512.0)))
         ..with(tiles)
     )
-    world.spawn(ECS.EntityRecipe()
-        ..with(Scene2D.Transform())
+    frames.camera = world.spawn(ECS.EntityRecipe()
+        ..with(Scene2D.Transform(position:Math.Vec2(0.5)))
         ..with(Scene2D.Camera())
     )
 }
@@ -45,17 +45,49 @@ func create_tile_field(world:&ECS.World, images:&Image.Store) {
 func verify_tile_case(
     renderer:@Renderer,
     frames:&TileFrame,
+    world:&ECS.World,
     controller:&Application.Controller
 ) {
     frames.value++
-    assert(renderer.tile_draw_count() == 1)
-    assert(renderer.tile_instance_count() > 0)
-    assert(renderer.tile_instance_count() < 2_000)
-    assert(renderer.tile_instance_allocation_count() == 1)
-    if frames.value == 2 {
+    let frame = frames.value
+    if frame <= 7 {
+        assert(renderer.tile_draw_count() == 1)
+        assert(renderer.tile_instance_count() > 0 && renderer.tile_instance_count() < 2_000)
+        assert(renderer.tile_instance_allocation_count() == 1)
+    }
+    if frame <= 3 {
         assert(renderer.tile_instance_upload_count() == 1)
+        assert(renderer.tile_preparation_build_count() == 1)
+    } elif frame <= 5 {
+        assert(renderer.tile_instance_upload_count() == 2)
+        assert(renderer.tile_preparation_build_count() == 2)
+    } elif frame == 6 {
+        assert(renderer.tile_instance_upload_count() == 3)
+        assert(renderer.tile_preparation_build_count() == 3)
+    } elif frame == 7 {
+        // An offscreen edit rebuilds the visible preparation, but transfers no GPU data.
+        assert(renderer.tile_instance_upload_count() == 3)
+        assert(renderer.tile_preparation_build_count() == 4)
+    } else {
+        assert(renderer.tile_draw_count() == 0)
+        assert(renderer.tile_preparation_cache_count() == 0)
         controller.stop()
     }
+    if frame == 2 {
+        world.update<Scene2D.Transform>(frames.camera!, func(pose:&Scene2D.Transform) {
+            pose.position = Math.Vec2(0.75)
+        })
+    } elif frame == 3 {
+        world.update<Scene2D.Transform>(frames.camera!, func(pose:&Scene2D.Transform) {
+            pose.position = Math.Vec2(8.75)
+        })
+    } elif frame == 4 {
+        world.update<Scene2D.TileMap>(frames.map!, func(map:&Scene2D.TileMap) { map.color = Color.black() })
+    } elif frame == 5 {
+        world.update<Scene2D.TileMap>(frames.map!, func(map:&Scene2D.TileMap) { map.set(128, 128, 1) })
+    } elif frame == 6 {
+        world.update<Scene2D.TileMap>(frames.map!, func(map:&Scene2D.TileMap) { map.set(0, 0, 1) })
+    } elif frame == 7 { world.destroy(frames.map!) }
 }
 
 test "cull a large tile field and retain unchanged visible uploads" {

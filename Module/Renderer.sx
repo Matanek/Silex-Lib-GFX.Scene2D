@@ -279,6 +279,21 @@ struct TileInstance {
     let region:Math.Vec4
 }
 
+class TilePreparation {
+    let entity:ECS.Entity
+    var revision:int = 0
+    var first_column:int = -1
+    var first_row:int = -1
+    var last_column:int = -1
+    var last_row:int = -1
+    var atlas_columns:int = 0
+    var atlas_rows:int = 0
+    var instances:TileInstance[] = []
+    var seen:bool = true
+
+    init(entity:ECS.Entity) { self.entity = entity }
+}
+
 struct SurfaceDraw {
     var surface:CanvasSurface
     let model:Math.Mat4
@@ -449,6 +464,8 @@ package class Renderer {
     private var sprite_instance_packed:str
     private var tile_map_draws:TileMapDraw[]
     private var tile_instances:TileInstance[]
+    private var tile_preparations:TilePreparation[] = []
+    private var tile_preparation_builds:int = 0
     private var tile_instance_buffer:GPU.Buffer? = null
     private var tile_instance_upload:GPU.TransferBuffer? = null
     private var tile_instance_capacity:int
@@ -892,6 +909,11 @@ package class Renderer {
         self.sprite_instance_indices.clear()
         self.tile_map_draws.clear()
         self.tile_instances.clear()
+        var preparation_index = 0
+        while preparation_index < self.tile_preparations.count() {
+            self.tile_preparations[preparation_index].seen = false
+            preparation_index++
+        }
         self.surface_draws.clear()
         self.coverage_glyph_draws.clear()
         self.coverage_glyph_instances.clear()
@@ -2208,31 +2230,58 @@ package class Renderer {
         )
         let visible = tile_map.visible_range(bounds.minimum, bounds.maximum)
         let first_instance = self.tile_instances.count()
-        var row = visible.first_row
-        while row < visible.last_row {
-            var column = visible.first_column
-            while column < visible.last_column {
-                if let tile = tile_map.tile(column, row) {
-                    if tile >= atlas_columns * atlas_rows {
-                        panic("GFX.Scene2D.TileMap tile index exceeds its atlas")
-                    }
-                    self.tile_instances.append(TileInstance(
-                        translation:Math.Vec2(
-                            (column as float + 0.5) * atlas.tile_width() as float,
-                            (row as float + 0.5) * atlas.tile_height() as float
-                        ),
-                        region:Math.Vec4(
-                            (tile % atlas_columns) as float / atlas_columns as float,
-                            (tile / atlas_columns) as float / atlas_rows as float,
-                            1.0 / atlas_columns as float,
-                            1.0 / atlas_rows as float
-                        )
-                    ))
-                }
-                column++
-            }
-            row++
+        var preparation_index = -1
+        var index = 0
+        while index < self.tile_preparations.count() {
+            if self.tile_preparations[index].entity == entity { preparation_index = index; break }
+            index++
         }
+        if preparation_index < 0 {
+            preparation_index = self.tile_preparations.count()
+            self.tile_preparations.append(TilePreparation(entity))
+        }
+        var prepared = self.tile_preparations[preparation_index]
+        prepared.seen = true
+        if prepared.revision != tile_map.revision() ||
+            prepared.first_column != visible.first_column || prepared.first_row != visible.first_row ||
+            prepared.last_column != visible.last_column || prepared.last_row != visible.last_row ||
+            prepared.atlas_columns != atlas_columns || prepared.atlas_rows != atlas_rows {
+            prepared.instances.clear()
+            var row = visible.first_row
+            while row < visible.last_row {
+                var column = visible.first_column
+                while column < visible.last_column {
+                    if let tile = tile_map.tile(column, row) {
+                        if tile >= atlas_columns * atlas_rows {
+                            panic("GFX.Scene2D.TileMap tile index exceeds its atlas")
+                        }
+                        prepared.instances.append(TileInstance(
+                            translation:Math.Vec2(
+                                (column as float + 0.5) * atlas.tile_width() as float,
+                                (row as float + 0.5) * atlas.tile_height() as float
+                            ),
+                            region:Math.Vec4(
+                                (tile % atlas_columns) as float / atlas_columns as float,
+                                (tile / atlas_columns) as float / atlas_rows as float,
+                                1.0 / atlas_columns as float,
+                                1.0 / atlas_rows as float
+                            )
+                        ))
+                    }
+                    column++
+                }
+                row++
+            }
+            prepared.revision = tile_map.revision()
+            prepared.first_column = visible.first_column
+            prepared.first_row = visible.first_row
+            prepared.last_column = visible.last_column
+            prepared.last_row = visible.last_row
+            prepared.atlas_columns = atlas_columns
+            prepared.atlas_rows = atlas_rows
+            self.tile_preparation_builds++
+        }
+        for instance in prepared.instances { self.tile_instances.append(instance) }
         let instance_count = self.tile_instances.count() - first_instance
         if instance_count == 0 { return }
         self.tile_map_draws.append(TileMapDraw(
@@ -2250,6 +2299,14 @@ package class Renderer {
     }
 
     func finish_prepare(device:@GPU.Device) {
+        var tile_index = self.tile_preparations.count() - 1
+        while tile_index >= 0 {
+            if !self.tile_preparations[tile_index].seen {
+                self.tile_preparations.swap(tile_index, self.tile_preparations.count() - 1)
+                self.tile_preparations.take_last()
+            }
+            tile_index--
+        }
         self.submit_image_uploads(device)
         self.submit_coverage_uploads(device)
         self.prepare_coverage_instances(device)
@@ -3226,6 +3283,8 @@ package class Renderer {
     package func coverage_layer_cache_index_count() int {
         return self.coverage_layer_cache_indices.count()
     }
+    package func tile_preparation_build_count() int { return self.tile_preparation_builds }
+    package func tile_preparation_cache_count() int { return self.tile_preparations.count() }
     package func tile_instance_count() int { return self.tile_instances.count() }
     package func tile_draw_count() int { return self.tile_map_draws.count() }
     package func tile_instance_upload_count() int {

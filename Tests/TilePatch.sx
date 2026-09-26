@@ -1,0 +1,26 @@
+use GFX.Assets.Image
+use GFX.Scene2D
+
+test "repeat nine tiles with top corners above the center in world coordinates" {
+    var images = Image.Store()
+    let atlas = Scene2D.TileAtlas(images.add(Image()), 18, 18)
+    var map = Scene2D.TileMap(atlas, 8, 8)
+    let before = map.revision()
+    let patch = Scene2D.TilePatch.atlas(17, 20)
+    map.fill(1, 2, 5, 4, patch)
+    assert(map.revision() == before + 1)
+    assert(map.tile(1, 2) == 57 && map.tile(5, 2) == 59)
+    assert(map.tile(1, 5) == 17 && map.tile(5, 5) == 19)
+    assert(map.tile(2, 3) == 38 && map.tile(4, 4) == 38)
+    assert(map.tile(0, 2) == null)
+    let snapshot = map
+    map.fill(1, 2, 5, 4, patch)
+    assert(map.revision() == snapshot.revision())
+    map.set(2, 3, 40)
+    var branch = snapshot
+    branch.set(2, 3, 41)
+    assert(map.revision() != branch.revision())
+    assert(map.revision() != snapshot.revision())
+    map.fill(0, 0, 2, 2, patch)
+    assert(map.tile(0, 0) == 57 && map.tile(1, 1) == 19)
+}

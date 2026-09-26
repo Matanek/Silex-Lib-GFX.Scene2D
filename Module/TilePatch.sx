@@ -1,0 +1,31 @@
+// Nine tile indices: corners stay fixed, edges and center repeat without stretching.
+public struct TilePatch {
+    private let tiles:int[]
+
+    init(top_left:int, top:int, top_right:int,
+         left:int, center:int, right:int,
+         bottom_left:int, bottom:int, bottom_right:int) {
+        self.tiles = [top_left, top, top_right, left, center, right,
+            bottom_left, bottom, bottom_right]
+        for tile in self.tiles {
+            if tile < 0 { panic("GFX.Scene2D.TilePatch indices must not be negative") }
+        }
+    }
+
+    static func atlas(top_left:int, columns:int) TilePatch {
+        if columns < 3 || top_left < 0 || top_left % columns + 2 >= columns {
+            panic("GFX.Scene2D.TilePatch.atlas requires three adjacent atlas columns")
+        }
+        return TilePatch(top_left, top_left + 1, top_left + 2,
+            top_left + columns, top_left + columns + 1, top_left + columns + 2,
+            top_left + columns * 2, top_left + columns * 2 + 1, top_left + columns * 2 + 2)
+    }
+
+    module func tile(column:int, row:int, columns:int, rows:int) int {
+        var x = 1
+        var y = 1
+        if column == 0 { x = 0 } elif column == columns - 1 { x = 2 }
+        if row == 0 { y = 2 } elif row == rows - 1 { y = 0 }
+        return self.tiles[y * 3 + x]
+    }
+}

@@ -427,3 +427,33 @@ extension peut lire les données publiques de scène et fournir son propre
 
 La démonstration visuelle [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 appartient à Silex-Examples.
+
+
+## Remplir une surface avec neuf tuiles
+
+`TilePatch(top_left, top, top_right, left, center, right, bottom_left,
+bottom, bottom_right)` décrit les neuf morceaux d'une surface. Pour un bloc
+contigu de 3 × 3 dans l'atlas, utiliser `TilePatch.atlas(top_left, columns)` ;
+`columns` est le nombre de colonnes de **l'atlas**.
+
+`map.fill(column, row, columns, rows, patch)` répète les bords et le centre,
+sans étirer les images. Le rectangle doit être entièrement dans la grille et
+mesurer au moins 2 × 2 cellules. Les coins supérieurs vont sur la ligne la plus
+haute du monde Y-up, indépendamment de l'ordre des lignes dans l'image.
+Une édition groupée change une seule fois `revision()` ; une écriture sans effet
+la conserve. Cette révision identifie le contenu, y compris entre deux cartes
+ou deux copies modifiées indépendamment : comparer son égalité, sans supposer
+que deux éditions successives donnent des nombres consécutifs.
+
+Le renderer conserve les instances locales de chaque carte visible. Il ne
+relit les cellules que si leur révision, la plage visible ou les dimensions de
+l'atlas changent. Teinte et déplacements qui conservent cette plage ne la
+reconstruisent pas. Les entrées des cartes absentes sont libérées à la fin de
+la préparation. Le buffer instancié reste partagé ; sa comparaison avant
+transfert évite aussi un envoi après une édition hors écran. Le regroupement
+reste un dessin par couche non vide afin de respecter l'ordre des couches.
+La première préparation parcourt les cellules visibles ; une modification
+invalide actuellement la préparation visible de toute la couche.
+
+Pour les cellules solides, ajouter `Physics.TileMapCollider2D` avec
+`Plugins.Physics2D` : [collisions de terrain](../../../GFX.Physics/Docs/FR/TileMap2D.md).

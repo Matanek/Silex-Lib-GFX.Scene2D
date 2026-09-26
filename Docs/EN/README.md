@@ -407,3 +407,31 @@ read public scene data and provide its own `GPU.ShaderProgram.hlsl`.
 
 The visual [AnalogClock](https://github.com/Matanek/Silex-Examples/blob/main/Sources/AnalogClock.sx)
 demonstration belongs to Silex-Examples.
+
+
+## Fill a surface with nine tiles
+
+`TilePatch(top_left, top, top_right, left, center, right, bottom_left,
+bottom, bottom_right)` describes a surface's nine parts. For a contiguous
+3 × 3 block in the atlas, use `TilePatch.atlas(top_left, columns)`;
+`columns` is the **atlas** column count.
+
+`map.fill(column, row, columns, rows, patch)` repeats edges and the center
+without stretching images. The rectangle must fit within the grid and contain
+at least 2 × 2 cells. Top corners occupy the highest row in the Y-up world,
+independently of the image's row order. A grouped edit changes `revision()`
+once; a no-op preserves it. This revision identifies content across separate
+maps and independently edited copies. Compare equality; successive edits need
+not produce consecutive numbers.
+
+The renderer retains each visible map's local instances. It reads cells again
+only when content revision, visible range or atlas dimensions change. Tint and
+movement within the same range do not rebuild them. Entries for absent maps
+are released at the end of preparation. The shared instance buffer is compared
+before transfer, which also avoids an upload after an offscreen edit. Batching
+remains one draw per nonempty layer to preserve layer order. Initial preparation
+visits visible cells; an edit currently invalidates that layer's entire visible
+preparation.
+
+For solid cells, add `Physics.TileMapCollider2D` with `Plugins.Physics2D`:
+[terrain collisions](../../../GFX.Physics/Docs/EN/TileMap2D.md).

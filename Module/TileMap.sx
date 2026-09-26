@@ -1,5 +1,6 @@
 use GFX.Color
 use GFX.Scene2D.Sampling
+use GFX.Scene2D.TilePatch
 use GFX.Scene2D.TileAtlas
 use STD.Math
 
@@ -28,6 +29,7 @@ public struct TileMap {
     private let row_count:int
     private var cells:int[]
     private var current_revision:int
+    private static var next_stamp:int = 1
     var color:Color
     var layer:int
     var depth:float
@@ -42,7 +44,7 @@ public struct TileMap {
         self.column_count = columns
         self.row_count = rows
         self.cells = empty_tile_cells(columns * rows)
-        self.current_revision = 1
+        self.current_revision = TileMap.new_stamp()
         self.color = Color.white()
         self.layer = 0
         self.depth = 0.0
@@ -54,6 +56,39 @@ public struct TileMap {
     func columns() int { return self.column_count }
     func rows() int { return self.row_count }
     func revision() int { return self.current_revision }
+
+    private static func new_stamp() int {
+        mutex {
+            let stamp = TileMap.next_stamp
+            TileMap.next_stamp++
+            return stamp
+        }
+    }
+
+    private func mark_changed() {
+        self.current_revision = TileMap.new_stamp()
+    }
+
+    // Repeat the center and edges while preserving the nine patch corners.
+    func fill(column:int, row:int, columns:int, rows:int, patch:TilePatch) {
+        if columns < 2 || rows < 2 {
+            panic("GFX.Scene2D.TileMap patches require at least two columns and rows")
+        }
+        self.require_cell(column, row)
+        self.require_cell(column + columns - 1, row + rows - 1)
+        var changed = false
+        for y in 0...rows {
+            for x in 0...columns {
+                let tile = patch.tile(x, y, columns, rows)
+                let index = (row + y) * self.column_count + column + x
+                if self.cells[index] != tile {
+                    self.cells[index] = tile
+                    changed = true
+                }
+            }
+        }
+        if changed { self.mark_changed() }
+    }
     func size() Math.Vec2 {
         return Math.Vec2(
             self.column_count * self.tile_atlas.tile_width() as float,
@@ -79,7 +114,7 @@ public struct TileMap {
         let index = row * self.column_count + column
         if self.cells[index] == tile { return }
         self.cells[index] = tile
-        self.current_revision++
+        self.mark_changed()
     }
 
     func clear(column:int, row:int) {
@@ -87,7 +122,7 @@ public struct TileMap {
         let index = row * self.column_count + column
         if self.cells[index] < 0 { return }
         self.cells[index] = -1
-        self.current_revision++
+        self.mark_changed()
     }
 
     func clear() {
@@ -100,7 +135,7 @@ public struct TileMap {
             }
             index++
         }
-        if changed { self.current_revision++ }
+        if changed { self.mark_changed() }
     }
 
     func fill(tile:int) {
@@ -114,7 +149,7 @@ public struct TileMap {
             }
             index++
         }
-        if changed { self.current_revision++ }
+        if changed { self.mark_changed() }
     }
 
     func coordinate_at(point:Math.Vec2) TileCoordinate? {
