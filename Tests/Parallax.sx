@@ -1,0 +1,26 @@
+use GFX.Scene2D
+use GFX.Scene2D.Parallax
+use STD.Math
+
+test "parallax preserves world speed at one and follows the camera at zero" {
+    let camera = Math.Vec2(110.0, -40.0)
+    let origin = Math.Vec2(10.0, 10.0)
+    assert(Scene2D.Parallax(Math.Vec2(1.0), origin).offset(camera) == Math.Vec2())
+    assert(Scene2D.Parallax(Math.Vec2(), origin).offset(camera) == Math.Vec2(100.0, -50.0))
+    assert(Scene2D.Parallax(Math.Vec2(0.2, 0.0), origin).offset(camera) == Math.Vec2(80.0, -50.0))
+}
+
+test "repetition covers negative view coordinates and excludes copies touching the border" {
+    let effect = Scene2D.Parallax(repeat_size:Math.Vec2(24.0, 12.0))
+    let copies = effect.copies(Math.Vec2(-24.0, -12.0), Math.Vec2(48.0, 24.0),
+        Math.Vec2(), Math.Vec2(24.0, 12.0))
+    assert(copies.first_column == -1 && copies.last_column == 2)
+    assert(copies.first_row == -1 && copies.last_row == 2)
+    let shifted = effect.copies(Math.Vec2(-24.1, -12.1), Math.Vec2(48.1, 24.1),
+        Math.Vec2(), Math.Vec2(24.0, 12.0))
+    assert(shifted.first_column == -2 && shifted.last_column == 3)
+    assert(shifted.first_row == -2 && shifted.last_row == 3)
+    let horizontal = Scene2D.Parallax(repeat_size:Math.Vec2(24.0, 0.0)).copies(
+        Math.Vec2(-100.0), Math.Vec2(100.0), Math.Vec2(), Math.Vec2(24.0))
+    assert(horizontal.first_row == 0 && horizontal.last_row == 1)
+}

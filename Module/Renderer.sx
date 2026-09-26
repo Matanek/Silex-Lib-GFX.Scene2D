@@ -21,6 +21,8 @@ use GFX.Scene2D.CanvasSurface.CanvasSurface
 use GFX.Scene2D.CanvasSurface.CanvasSurfaceRenderer
 use GFX.Scene2D.Grid
 use GFX.Scene2D.Packing
+use GFX.Scene2D.Parallax
+use GFX.Scene2D.Parallax.Repetitions
 use GFX.Scene2D.Sprite
 use GFX.Scene2D.TileMap
 use GFX.Scene2D.Transform
@@ -521,6 +523,7 @@ package class Renderer {
     private var viewport:Math.Vec2
     private var display_scale:float
     private var selected_camera:bool
+    private var camera_position:Math.Vec2 = Math.Vec2()
     private var selected_camera_order:int
     private var camera_ready:bool
     private var grid:Grid? = null
@@ -628,6 +631,7 @@ package class Renderer {
         self.viewport = Math.Vec2(1.0)
         self.display_scale = 1.0
         self.selected_camera = false
+        self.camera_position = Math.Vec2()
         self.selected_camera_order = 0
         self.camera_ready = false
     }
@@ -902,6 +906,7 @@ package class Renderer {
         self.scene_view_projection = default_camera.projection(self.viewport)
         self.camera_ready = true
         self.selected_camera = false
+        self.camera_position = Math.Vec2()
         self.selected_camera_order = 0
         self.scene_draws.clear()
         self.image_mask_draws.clear()
@@ -944,6 +949,7 @@ package class Renderer {
         if camera.is_active() &&
             (!self.selected_camera || camera.render_order() < self.selected_camera_order)
         {
+            self.camera_position = transform.position
             self.scene_view_projection = camera.projection(self.viewport)
                 .multiply(camera.view(transform))
             self.camera_ready = true
@@ -2174,7 +2180,8 @@ package class Renderer {
         entity:ECS.Entity,
         transform:@Transform,
         sprite:@Sprite,
-        images:@Image.Store
+        images:@Image.Store,
+        parallax:Parallax? = null
     ) {
         let handle = sprite.asset()
         if !sprite.is_visible() || !images.contains(handle) { return }
@@ -2192,19 +2199,38 @@ package class Renderer {
             image,
             "GFX.Scene2D sprite"
         )
-        self.sprite_draws.append(SpriteDraw(
-            cache:cache_index,
-            model:world_image_model(transform),
-            size:sprite.sprite_size(),
-            pivot:sprite.sprite_pivot(),
-            color:sprite.tint(),
-            region:normalized_region(image, sprite.image_region()),
-            sampling:sprite.sampling_mode(),
-            layer:sprite.render_layer(),
-            depth:sprite.render_depth(),
-            order:entity.index * 2,
-            viewport:false
-        ))
+        var rendered = copy transform
+        var period = Math.Vec2()
+        if let effect = parallax {
+            rendered.position = rendered.position.add(effect.offset(self.camera_position))
+            period = effect.repeat_size
+        }
+        let minimum = sprite.sprite_pivot().multiply(sprite.sprite_size()).multiply(-1.0)
+        let maximum = minimum.add(sprite.sprite_size())
+        let copies = self.repetitions(world_image_model(rendered), minimum, maximum, parallax)
+        var row = copies.first_row
+        while row < copies.last_row {
+            var column = copies.first_column
+            while column < copies.last_column {
+                var repeated = rendered
+                repeated.position = repeated.position.add(Math.Vec2(column as float, row as float).multiply(period))
+                self.sprite_draws.append(SpriteDraw(
+                    cache:cache_index,
+                    model:world_image_model(repeated),
+                    size:sprite.sprite_size(),
+                    pivot:sprite.sprite_pivot(),
+                    color:sprite.tint(),
+                    region:normalized_region(image, sprite.image_region()),
+                    sampling:sprite.sampling_mode(),
+                    layer:sprite.render_layer(),
+                    depth:sprite.render_depth(),
+                    order:entity.index * 2,
+                    viewport:false
+                ))
+                column++
+            }
+            row++
+        }
     }
 
     func collect_tile_map(
@@ -2212,7 +2238,8 @@ package class Renderer {
         entity:ECS.Entity,
         transform:@Transform,
         tile_map:@TileMap,
-        images:@Image.Store
+        images:@Image.Store,
+        parallax:Parallax? = null
     ) {
         if !tile_map.visible { return }
         let atlas = tile_map.atlas()
@@ -2240,16 +2267,62 @@ package class Renderer {
             "GFX.Scene2D tile atlas"
         )
 
+        var rendered = copy transform
+        var period = Math.Vec2()
+        if let effect = parallax {
+            rendered.position = rendered.position.add(effect.offset(self.camera_position))
+            period = effect.repeat_size
+        }
+        let copies = self.repetitions(rendered.matrix(), Math.Vec2(), tile_map.size(), parallax)
+        var inverse = Math.Mat4()
+        if period != Math.Vec2() { inverse = rendered.view_matrix() }
+        let first_instance = self.tile_instances.count()
+        var row = copies.first_row
+        while row < copies.last_row {
+            var column = copies.first_column
+            while column < copies.last_column {
+                let offset = Math.Vec2(column as float, row as float).multiply(period)
+                var repeated = rendered
+                repeated.position = repeated.position.add(offset)
+                let local_offset = inverse.multiply(Math.Vec4(offset.x, offset.y, 0.0, 0.0))
+                self.collect_tile_instances(entity, repeated, tile_map, atlas_columns, atlas_rows,
+                    Math.Vec2(local_offset.x, local_offset.y))
+                column++
+            }
+            row++
+        }
+        let instance_count = self.tile_instances.count() - first_instance
+        if instance_count == 0 { return }
+        self.tile_map_draws.append(TileMapDraw(
+            cache:cache_index,
+            model:rendered.matrix(),
+            size:atlas.tile_size(),
+            color:tile_map.color,
+            sampling:tile_map.sampling_mode(),
+            first_instance:first_instance,
+            instance_count:instance_count,
+            layer:tile_map.layer,
+            depth:tile_map.depth,
+            order:entity.index * 2
+        ))
+    }
+
+    private func collect_tile_instances(entity:ECS.Entity, transform:@Transform,
+                                       tile_map:@TileMap, atlas_columns:int, atlas_rows:int,
+                                       offset:Math.Vec2) {
+        let atlas = tile_map.atlas()
         let bounds = viewport_bounds_in_local_space(
             self.scene_view_projection,
             transform
         )
         let visible = tile_map.visible_range(bounds.minimum, bounds.maximum)
-        let first_instance = self.tile_instances.count()
         var preparation_index = -1
         var index = 0
         while index < self.tile_preparations.count() {
-            if self.tile_preparations[index].entity == entity { preparation_index = index; break }
+            var candidate = self.tile_preparations[index]
+            if candidate.entity == entity && candidate.first_column == visible.first_column &&
+                candidate.first_row == visible.first_row && candidate.last_column == visible.last_column &&
+                candidate.last_row == visible.last_row { preparation_index = index; break }
             index++
         }
         if preparation_index < 0 {
@@ -2297,21 +2370,22 @@ package class Renderer {
             prepared.atlas_rows = atlas_rows
             self.tile_preparation_builds++
         }
-        for instance in prepared.instances { self.tile_instances.append(instance) }
-        let instance_count = self.tile_instances.count() - first_instance
-        if instance_count == 0 { return }
-        self.tile_map_draws.append(TileMapDraw(
-            cache:cache_index,
-            model:transform.matrix(),
-            size:atlas.tile_size(),
-            color:tile_map.color,
-            sampling:tile_map.sampling_mode(),
-            first_instance:first_instance,
-            instance_count:instance_count,
-            layer:tile_map.layer,
-            depth:tile_map.depth,
-            order:entity.index * 2
-        ))
+        for instance in prepared.instances {
+            self.tile_instances.append(TileInstance(
+                translation:instance.translation.add(offset), region:instance.region))
+        }
+    }
+
+    private func repetitions(model:Math.Mat4, minimum:Math.Vec2, maximum:Math.Vec2,
+                             parallax:Parallax?) Repetitions {
+        if let effect = parallax {
+            if effect.repeat_size != Math.Vec2() {
+                let viewport = viewport_bounds_in_local_space(self.scene_view_projection, Transform())
+                let content = transformed_bounds(model, minimum, maximum)
+                return effect.copies(viewport.minimum, viewport.maximum, content.minimum, content.maximum)
+            }
+        }
+        return Repetitions()
     }
 
     func finish_prepare(device:@GPU.Device) {
@@ -4163,6 +4237,19 @@ local func world_image_model(transform:@Transform) Math.Mat4 {
 struct LocalBounds {
     let minimum:Math.Vec2
     let maximum:Math.Vec2
+}
+
+local func transformed_bounds(model:Math.Mat4, minimum:Math.Vec2, maximum:Math.Vec2) LocalBounds {
+    let first = model.multiply(Math.Vec4(minimum.x, minimum.y, 0.0, 1.0))
+    var lower = Math.Vec2(first.x, first.y)
+    var upper = lower
+    let corners:Math.Vec2[] = [Math.Vec2(maximum.x, minimum.y), maximum, Math.Vec2(minimum.x, maximum.y)]
+    for corner in corners {
+        let point = model.multiply(Math.Vec4(corner.x, corner.y, 0.0, 1.0))
+        lower = Math.Vec2(Math.min(lower.x, point.x), Math.min(lower.y, point.y))
+        upper = Math.Vec2(Math.max(upper.x, point.x), Math.max(upper.y, point.y))
+    }
+    return LocalBounds(minimum:lower, maximum:upper)
 }
 
 local func viewport_bounds_in_local_space(

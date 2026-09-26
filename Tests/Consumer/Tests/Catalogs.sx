@@ -12,6 +12,8 @@ test "consume Scene2D directly and through the GFX catalogs" {
     var direct = Scene2D.Canvas(AuthoredCanvas(), 16, 16)
     var catalog = Components.Canvas(AuthoredCanvas(), 16, 16)
     var unbounded = Components.Canvas(AuthoredCanvas())
+    let parallax = Components.Parallax2D(factor:Math.Vec2(0.2, 0.0))
+    assert(parallax.offset(Math.Vec2(10.0)) == Math.Vec2(8.0, 10.0))
     let transform = Components.Transform2D()
     let camera = Components.Camera2D()
     let scene = Plugins.Scene2D()

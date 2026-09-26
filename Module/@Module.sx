@@ -9,6 +9,7 @@ public use GFX.Scene2D.CanvasSurface.CanvasSurface
 public use GFX.Scene2D.CanvasSurface.CanvasSurfaceRenderer
 public use GFX.Scene2D.Grid.Grid
 public use GFX.Scene2D.Plugin.Plugin
+public use GFX.Scene2D.Parallax.Parallax
 public use GFX.Scene2D.Sampling.Sampling
 public use GFX.Scene2D.Sprite.Sprite
 public use GFX.Scene2D.TileAtlas.TileAtlas
@@ -24,6 +25,7 @@ contribute GFX.Components {
     public use GFX.Scene2D.Canvas.Space as CanvasSpace
     public use GFX.Scene2D.Sprite as Sprite2D
     public use GFX.Scene2D.TileMap as TileMap2D
+    public use GFX.Scene2D.Parallax as Parallax2D
     public use GFX.Scene2D.Transform as Transform2D
 }
 

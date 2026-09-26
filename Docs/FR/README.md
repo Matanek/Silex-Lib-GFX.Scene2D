@@ -2,7 +2,7 @@
 
 `GFX.Scene2D` possède les données qu’un utilisateur ou renderer alternatif doit
 nommer pour décrire une scène 2D : `Transform`, `Camera`, `Canvas`, `Sprite`,
-`TileAtlas`, `TileMap`, `Grid` et `Sampling`. Le domaine portant déjà la
+`TileAtlas`, `TileMap`, `Parallax`, `Grid` et `Sampling`. Le domaine portant déjà la
 dimension, ses déclarations
 restent sans suffixe.
 
@@ -54,6 +54,38 @@ droite et Y vers le haut. Le contenu `GFX.Canvas` conserve ses coordonnées de
 dessin naturelles, origine en haut à gauche et Y vers le bas ; Scene2D l’oriente
 automatiquement. `Camera.project()` retourne les mêmes coordonnées viewport
 adaptées au pointeur et aux API de fenêtre.
+
+## Faire défiler un décor en parallaxe
+
+Ajouter `Scene2D.Parallax` (ou `Components.Parallax2D`) à une entité portant
+`Transform` et `Sprite` ou `TileMap`. Ce fragment suppose une entité `decor`
+existante dans `world` :
+
+```sx
+world.insert(decor, Scene2D.Parallax(
+    factor:Math.Vec2(0.2, 0.0),
+    origin:Math.Vec2(160.0, 90.0),
+    repeat_size:Math.Vec2(96.0, 0.0)))
+```
+
+Chaque facteur règle le déplacement apparent sur un axe : `1` conserve le
+mouvement du monde, `0` compense la translation de caméra. `origin` est la
+position de caméra pour laquelle le décalage vaut zéro. Le zoom et la rotation
+de caméra continuent à s’appliquer. Les positions ECS et les collisions restent
+inchangées ; ce composant concerne le rendu des sprites et des tilemaps.
+
+`repeat_size` donne les périodes en unités monde, sur les axes X/Y du monde ;
+`0` désactive un axe. Elles restent indépendantes de l’échelle et de la rotation
+du drawable. Ajuster la période aux dimensions finales du motif pour éviter
+les trous ou les recouvrements. Tous les nombres doivent être finis et les
+périodes positives ou nulles.
+
+Le renderer ne produit que les répétitions susceptibles de toucher le viewport.
+Les sprites compatibles restent regroupés ; toutes les copies d’une tilemap
+utilisent un seul dessin GPU. La préparation des cellules est réutilisée tant
+que leur plage visible, leur contenu et les dimensions de l’atlas restent
+identiques. Aucun défilement automatique n’est ajouté : déplacer le transform
+ou l’origine permet d’animer volontairement le décor.
 
 ## Dessiner un champ de tuiles retenu
 

@@ -11,6 +11,7 @@ use GFX.Scene2D.Camera as SceneCamera
 use GFX.Scene2D.Canvas as SceneCanvas
 use GFX.Scene2D.CanvasSurface.CanvasSurfaceRenderer
 use GFX.Scene2D.Renderer
+use GFX.Scene2D.Parallax
 use GFX.Scene2D.Sprite as SceneSprite
 use GFX.Scene2D.TileMap as SceneTileMap
 use GFX.Scene2D.Transform
@@ -58,6 +59,7 @@ func start_scene(
 
 func prepare_scene(
     device:@GPU.Device,
+    world:@ECS.World,
     canvases:ECS.Query<(ECS.Entity, @Transform, @SceneCanvas)>,
     sprites:ECS.Query<(ECS.Entity, @Transform, @SceneSprite)>,
     tile_maps:ECS.Query<(ECS.Entity, @Transform, @SceneTileMap)>,
@@ -76,10 +78,14 @@ func prepare_scene(
         renderer.collect_canvas(device, entity, transform, canvas, surfaces)
     }
     for (entity, transform, sprite) in sprites {
-        renderer.collect_sprite(device, entity, transform, sprite, images)
+        var parallax:Parallax? = null
+        if world.has<Parallax>(entity) { parallax = world.get<Parallax>(entity) }
+        renderer.collect_sprite(device, entity, transform, sprite, images, parallax)
     }
     for (entity, transform, tile_map) in tile_maps {
-        renderer.collect_tile_map(device, entity, transform, tile_map, images)
+        var parallax:Parallax? = null
+        if world.has<Parallax>(entity) { parallax = world.get<Parallax>(entity) }
+        renderer.collect_tile_map(device, entity, transform, tile_map, images, parallax)
     }
     surfaces.finish_frame()
     renderer.finish_prepare(device)

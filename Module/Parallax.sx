@@ -1,0 +1,55 @@
+use STD.Math
+
+// Changes rendering only. Repetition periods and origin use world coordinates.
+public struct Parallax {
+    var factor:Math.Vec2
+    var origin:Math.Vec2
+    var repeat_size:Math.Vec2
+
+    init(
+        factor:Math.Vec2 = Math.Vec2(0.5),
+        origin:Math.Vec2 = Math.Vec2(),
+        repeat_size:Math.Vec2 = Math.Vec2()
+    ) {
+        self.factor = factor
+        self.origin = origin
+        self.repeat_size = repeat_size
+        self.validate()
+    }
+
+    func offset(camera_position:Math.Vec2) Math.Vec2 {
+        self.validate()
+        return camera_position.subtract(self.origin).multiply(Math.Vec2(1.0).subtract(self.factor))
+    }
+
+    package func copies(minimum:Math.Vec2, maximum:Math.Vec2,
+                        content_minimum:Math.Vec2, content_maximum:Math.Vec2) Repetitions {
+        self.validate()
+        var result = Repetitions()
+        if self.repeat_size.x > 0.0 {
+            result.first_column = Math.floor((minimum.x - content_maximum.x) / self.repeat_size.x) as int + 1
+            result.last_column = Math.ceil((maximum.x - content_minimum.x) / self.repeat_size.x) as int
+        }
+        if self.repeat_size.y > 0.0 {
+            result.first_row = Math.floor((minimum.y - content_maximum.y) / self.repeat_size.y) as int + 1
+            result.last_row = Math.ceil((maximum.y - content_minimum.y) / self.repeat_size.y) as int
+        }
+        return result
+    }
+
+    private func validate() {
+        if !Math.is_finite(self.factor.x) || !Math.is_finite(self.factor.y) ||
+            !Math.is_finite(self.origin.x) || !Math.is_finite(self.origin.y) ||
+            !Math.is_finite(self.repeat_size.x) || !Math.is_finite(self.repeat_size.y) ||
+            self.repeat_size.x < 0.0 || self.repeat_size.y < 0.0 {
+            panic("GFX.Scene2D.Parallax requires finite values and nonnegative repetition periods")
+        }
+    }
+}
+
+package struct Repetitions {
+    var first_column:int = 0
+    var first_row:int = 0
+    var last_column:int = 1
+    var last_row:int = 1
+}

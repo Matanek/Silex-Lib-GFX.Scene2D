@@ -443,3 +443,33 @@ preparation.
 
 For solid cells, add `Physics.TileMapCollider2D` with `Plugins.Physics2D`:
 [terrain collisions](../../../GFX.Physics/Docs/EN/TileMap2D.md).
+
+## Scroll scenery with parallax
+
+Add `Scene2D.Parallax` (or `Components.Parallax2D`) to an entity with `Transform`
+and `Sprite` or `TileMap`. This fragment assumes an existing `decor` entity in
+`world`:
+
+```sx
+world.insert(decor, Scene2D.Parallax(
+    factor:Math.Vec2(0.2, 0.0),
+    origin:Math.Vec2(160.0, 90.0),
+    repeat_size:Math.Vec2(96.0, 0.0)))
+```
+
+Each factor controls apparent motion on one axis: `1` keeps world motion,
+while `0` compensates camera translation. `origin` is the camera position at
+which the offset is zero. Camera zoom and rotation still apply. ECS positions
+and collisions stay unchanged; this component affects sprite and tile map
+rendering.
+
+`repeat_size` gives periods in world units along the world X/Y axes; `0`
+disables an axis. Periods remain independent of the drawable's scale and
+rotation. Match the period to the final motif dimensions to avoid gaps or
+overlap. All numbers must be finite and periods must be nonnegative.
+
+The renderer emits only repetitions that may intersect the viewport.
+Compatible sprites remain batched; all copies of one tile map use one GPU
+draw. Cell preparation is reused while the visible cell range, content, and
+atlas dimensions stay the same. No automatic scrolling is added: move the
+transform or origin to animate scenery deliberately.
