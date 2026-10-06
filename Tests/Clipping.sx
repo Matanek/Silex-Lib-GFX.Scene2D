@@ -1,0 +1,62 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+func pixels(device:@GPU.Device, surface:@Scene2D.CanvasSurface) uint8[] {
+    var download = device.download_buffer(surface.width() * surface.height() * 4)
+    var commands = device.commands()
+    var transfer = commands.copy()
+    transfer.download(GPU.TextureRegion(texture:surface.texture(),
+        width:surface.width(), height:surface.height()), download, surface.width(), surface.height())
+    transfer.finish()
+    var completed = commands.submit_and_track()
+    completed.wait()
+    return download.read()
+}
+
+func check_clipped_layers() {
+    var device = GPU.Device(GPU.DeviceSettings(debug:true))
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = Canvas()
+    let widths:float[] = [8.0, 4.0, 8.0]
+    for width in widths {
+        drawing.clear()
+        drawing.paint(func(painter:&Canvas.Painter) {
+            painter.clip(Canvas.Rect(Math.Vec2(4.0), Math.Vec2(width, 8.0)), func(clipped:&Canvas.Painter) {
+                clipped.fill(Canvas.Rect(Math.Vec2(), Math.Vec2(20.0)), Canvas.Fill.solid(Color.white()))
+                clipped.clip(Canvas.Rect(Math.Vec2(4.0), Math.Vec2()), func(empty:&Canvas.Painter) {
+                    empty.fill(Canvas.Rect(Math.Vec2(), Math.Vec2(20.0)), Canvas.Fill.solid(Color.cyan_500()))
+                })
+            })
+        })
+        var surface = renderer.render(drawing.snapshot(20, 20), Canvas.Rect(Math.Vec2(), Math.Vec2(20.0)), 1.0)
+        let image = pixels(device, surface)
+        assert(image[(6 * 20 + 5) * 4 + 3] > 0 as uint8)
+        assert(image[(6 * 20 + 3) * 4 + 3] == 0 as uint8)
+        assert(image[(6 * 20 + 12) * 4 + 3] == 0 as uint8)
+        assert((image[(6 * 20 + 10) * 4 + 3] > 0 as uint8) == (width > 4.0))
+    }
+    drawing.clear()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.clip(Canvas.Rect(Math.Vec2(6.0), Math.Vec2(8.0)), func(clipped:&Canvas.Painter) {
+            clipped.layer([Canvas.Effect.shadow(Math.Vec2(6.0, 0.0), 0.0, Color.blue_500())],
+                func(layer:&Canvas.Painter) {
+                    layer.fill(Canvas.Rect(Math.Vec2(2.0, 8.0), Math.Vec2(2.0)), Canvas.Fill.solid(Color.white()))
+                })
+        })
+    })
+    var shadow = renderer.render(drawing.snapshot(20, 20), Canvas.Rect(Math.Vec2(), Math.Vec2(20.0)), 1.0)
+    let image = pixels(device, shadow)
+    assert(image[(8 * 20 + 8) * 4 + 3] > 0 as uint8)
+    assert(image[(8 * 20 + 2) * 4 + 3] == 0 as uint8)
+}
+
+test "clip GPU layers after nested effects and refresh a retained resized clip" {
+    check_clipped_layers()
+}
+
+// A compile-only entry point lets consumers qualify the native path without
+// executing GPU/video initialization. Running it remains a deliberate check.
+func main() { check_clipped_layers() }

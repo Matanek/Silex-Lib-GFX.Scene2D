@@ -434,6 +434,16 @@ donc sensiblement plus coûteux que les petites surfaces statiques réutilisées
 Cette API ne fournit pas de flou d’arrière-plan : un tel effet exige une
 dépendance distincte sur le contenu déjà rendu.
 
+
+## Découper un groupe Canvas
+
+`Painter.clip(rect, callback)` borne le groupe en coordonnées logiques. Le renderer
+compose ses formes, images, glyphes et couches enfants dans une surface GPU
+retenue, après les effets enfants, puis la place dans la scène. Les clips
+imbriqués s’intersectent et les clips vides ne produisent aucun dessin. La surface
+est réutilisée tant que révision, limites et densité sont inchangées. Le rayon
+d’un rectangle ne définit pas un clip arrondi.
+
 ## Étendre le renderer
 
 `Plugins.Scene2D` installe ses dépendances ECS, assets et rendu puis enregistre

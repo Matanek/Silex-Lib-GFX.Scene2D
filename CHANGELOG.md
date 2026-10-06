@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Compose clipped Canvas groups through retained GPU surfaces after child effects. Empty groups are skipped; changed bounds invalidate their surface while unchanged groups remain cached.
+
 - Vector caches distinguish each glyph face for Canvas lines using a fallback font.
 
 - Fixed backgrounds and borders retaining old geometry after resizing reused Canvas drawings. The cache tracks each content revision; unchanged drawings do not trigger another upload.

@@ -383,6 +383,15 @@ expensive than small reused static surfaces. This API does not provide a
 backdrop blur, which requires a separate dependency on content rendered
 earlier in the frame.
 
+
+## Clip a Canvas group
+
+`Painter.clip(rect, callback)` bounds a group in logical coordinates. The renderer
+composes its shapes, images, glyphs and child layers in a retained GPU surface
+after child effects, then places it in the scene. Nested clips intersect and
+empty clips emit no drawing. The surface is reused while revision, bounds and
+density stay unchanged. A rectangle’s radius does not define a rounded clip.
+
 ## Extend the renderer
 
 `Plugins.Scene2D` installs its ECS, asset, and rendering dependencies and

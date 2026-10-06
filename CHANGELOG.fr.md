@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Composer les groupes Canvas découpés avec les surfaces GPU retenues, après leurs effets enfants. Les groupes vides sont ignorés ; les changements de limites invalident leur surface sans reconstruire les groupes inchangés.
+
 - Les caches vectoriels distinguent les faces de chaque glyphe pour les lignes Canvas qui utilisent une police de secours.
 
 - Correction des fonds et bordures conservant leur ancienne géométrie après redimensionnement de dessins Canvas réutilisés. Le cache suit la révision de chaque contenu ; les dessins inchangés ne provoquent pas de nouvel upload.

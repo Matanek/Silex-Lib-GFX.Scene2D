@@ -1086,7 +1086,8 @@ package class Renderer {
                     order++
                 }
                 layer(value) => {
-                    if value.effects().is_empty() {
+                    if value.bounds() == null { continue }
+                    if value.effects().is_empty() && value.clip() == null {
                         let nested = value.content_view()
                         self.collect_canvas_content(
                             device,
@@ -3904,6 +3905,7 @@ package func analytic_blurred_coverage(edge:float, radius:float) float {
 }
 
 func analytic_shadow_layer(value:@LayerContent) AnalyticShadowIntent? {
+    if value.clip() != null { return null }
     let effects = value.effects()
     if effects.count() != 1 { return null }
     var shadow:ShadowEffect? = null

@@ -1042,7 +1042,8 @@ public class CanvasSurfaceRenderer {
         for item in content {
             match item {
                 layer(value) => {
-                    if value.effects().is_empty() {
+                    if value.bounds() == null { continue }
+                    if value.effects().is_empty() && value.clip() == null {
                         let nested = value.content_view()
                         self.prepare_nested(device, nested, density, text_mode)
                     } else {
