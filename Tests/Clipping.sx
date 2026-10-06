@@ -37,6 +37,7 @@ func check_clipped_layers() {
         assert(image[(6 * 20 + 3) * 4 + 3] == 0 as uint8)
         assert(image[(6 * 20 + 12) * 4 + 3] == 0 as uint8)
         assert((image[(6 * 20 + 10) * 4 + 3] > 0 as uint8) == (width > 4.0))
+        print("Clip retenu $(width) px : OK")
     }
     drawing.clear()
     drawing.paint(func(painter:&Canvas.Painter) {
@@ -51,6 +52,7 @@ func check_clipped_layers() {
     let image = pixels(device, shadow)
     assert(image[(8 * 20 + 8) * 4 + 3] > 0 as uint8)
     assert(image[(8 * 20 + 2) * 4 + 3] == 0 as uint8)
+    print("Ombre enfant puis découpage : OK")
 }
 
 test "clip GPU layers after nested effects and refresh a retained resized clip" {
@@ -59,4 +61,8 @@ test "clip GPU layers after nested effects and refresh a retained resized clip" 
 
 // A compile-only entry point lets consumers qualify the native path without
 // executing GPU/video initialization. Running it remains a deliberate check.
-func main() { check_clipped_layers() }
+func main() {
+    print("Clipping GPU : démarrage")
+    check_clipped_layers()
+    print("Clipping GPU : OK")
+}
