@@ -81,6 +81,57 @@ func same_pixels(first:@uint8[], second:@uint8[]) bool {
     return true
 }
 
+test "recreated canvases refresh reused authored geometry after resize" {
+    var device = GPU.Device(GPU.DeviceSettings(debug:true))
+    var renderer = Renderer()
+    renderer.start_offscreen(device, GPU.TextureFormat.rgba8_unorm)
+    var surfaces = Scene2D.CanvasSurfaceRenderer(device)
+    var world = ECS.World()
+    var drawings:Canvas[] = [Canvas(), Canvas()]
+    let widths:int[] = [96, 96, 64, 64, 32, 32, 96, 96]
+    for index, width in widths.indexed() {
+        var drawing = drawings[index % 2]
+        drawing.clear()
+        drawing.paint(func(painter:&Canvas.Painter) {
+            painter.fill(
+                Canvas.Rect(Math.Vec2(4.0, (96 - width) as float * 0.5 + 4.0),
+                    Math.Vec2(width as float * 0.6, 12.0), 3.0),
+                Canvas.Fill.solid(Color.amber_400())
+            )
+            painter.text("resize", Math.Vec2(4.0, 76.0), Canvas.TextStyle(size:10.0))
+            painter.stroke(
+                Canvas.Rect(Math.Vec2(4.0, 60.0), Math.Vec2(width as float * 0.5, 10.0)),
+                Canvas.Stroke(Color.cyan_400(), 2.0)
+            )
+            painter.layer(
+                [Canvas.Effect.shadow(Math.Vec2(2.0), 3.0, Color.black())],
+                func(layer:&Canvas.Painter) {
+                    layer.fill(
+                        Canvas.Rect(Math.Vec2(4.0, 44.0), Math.Vec2(width as float * 0.4, 8.0), 2.0),
+                        Canvas.Fill.solid(Color.cyan_400())
+                    )
+                }
+            )
+        })
+        let entity = world.spawn(ECS.EntityRecipe())
+        var canvas = SceneCanvas(drawing, width, 96)
+        canvas.space = Scene2D.CanvasSpace.viewport
+        var canvases:SceneCanvas[] = [canvas]
+        var entities:ECS.Entity[] = [entity]
+        let actual = render_instances(device, renderer, surfaces, entities, canvases, false)
+        var oracle = Renderer()
+        oracle.start_offscreen(device, GPU.TextureFormat.rgba8_unorm)
+        var oracle_surfaces = Scene2D.CanvasSurfaceRenderer(device)
+        let expected = render_instances(device, oracle, oracle_surfaces, entities, canvases, false)
+        assert(same_pixels(actual, expected))
+        let uploads = renderer.geometry_refresh_count()
+        let repeated = render_instances(device, renderer, surfaces, entities, canvases, false)
+        assert(same_pixels(repeated, expected))
+        assert(renderer.geometry_refresh_count() == uploads)
+        world.destroy(entity)
+    }
+}
+
 test "preserve mixed drawing instances through growth sorting and shadow removal" {
     var device = GPU.Device(GPU.DeviceSettings(debug:true))
     var renderer = Renderer()

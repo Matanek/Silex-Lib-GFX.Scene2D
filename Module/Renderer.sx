@@ -424,6 +424,9 @@ package class Renderer {
     private var scene_drawing_snapshot_generations:Dictionary<int, int>
     private var mutable_scene_drawings:Dictionary<int, int>
     private var mutable_content_drawings:Dictionary<int, int>
+    // Authored identity survives recreating a framed Canvas at another size.
+    // Track each content key separately from shared immutable mesh entries.
+    private var content_drawing_revisions:Dictionary<int, int>
     private var surface_content_drawings:Dictionary<int, int>
     private var surface_content_identity:int
     private var surface_content_revision:int
@@ -534,6 +537,7 @@ package class Renderer {
         self.scene_drawing_snapshot_generations = Dictionary<int, int>(minimum_capacity:256)
         self.mutable_scene_drawings = Dictionary<int, int>(minimum_capacity:64)
         self.mutable_content_drawings = Dictionary<int, int>(minimum_capacity:64)
+        self.content_drawing_revisions = Dictionary<int, int>(minimum_capacity:64)
         self.surface_content_drawings = Dictionary<int, int>(minimum_capacity:128)
         self.surface_content_identity = 0
         self.surface_content_revision = 0
@@ -2050,7 +2054,6 @@ package class Renderer {
     ) CachedVectorLayer? {
         var runs = layer.glyph_runs()
         var instance_identity = "empty"
-        var embolden = false
         if !runs.is_empty() {
             var instance = runs[0].instance()
             var face = instance.face()
@@ -2059,7 +2062,6 @@ package class Renderer {
                 instance_identity = instance_identity +
                     "|$(variation.tag)=$(variation.value)"
             }
-            embolden = instance.synthesis().embolden
         }
         var glyphs:VectorGlyph[] = []
         match layer.vector_outlines() {
@@ -2068,7 +2070,9 @@ package class Renderer {
                 for placement in placements {
                     if let outline = placement.glyph.outline {
                         if outline.is_empty() { continue }
-                        let key = instance_identity + "|glyph=$(placement.glyph.glyph_id)|detail=$(detail)"
+                        var selected_identity = placement.outline_identity
+                        if selected_identity == "" { selected_identity = instance_identity }
+                        let key = selected_identity + "|glyph=$(placement.glyph.glyph_id)|detail=$(detail)"
                         let cache = self.glyph_mesh(device, key, outline, detail)
                         let transform = placement.glyph.transform
                         let placed = VectorGlyph(
@@ -2088,7 +2092,7 @@ package class Renderer {
                             )
                         )
                         glyphs.append(placed)
-                        if embolden {
+                        if placement.embolden {
                             glyphs.append(VectorGlyph(
                                 key:placed.key,
                                 cache:placed.cache,
@@ -2943,19 +2947,6 @@ package class Renderer {
         return self.scene_drawing_cache.count() - 1
     }
 
-    private func register_content_drawing(
-        device:@GPU.Device,
-        geometry:@Mesh
-    ) int {
-        let packed = Packing.drawing_vertices(geometry)
-        return self.register_packed_drawing(
-            device,
-            packed,
-            geometry.vertex_count(),
-            36
-        )
-    }
-
     private func content_drawing_cache(
         device:@GPU.Device,
         entity_index:int,
@@ -2972,38 +2963,24 @@ package class Renderer {
                 36
             )
         }
-        if !canvas.is_detached() && canvas.revision() <= 1 {
-            let key = self.mutable_content_key(entity_index, order, 0, canvas)
-            if self.mutable_content_drawings.contains(key) {
-                return self.mutable_content_drawings.get(key) + 0
-            }
-            let cache_index = self.register_content_drawing(device, geometry)
-            self.mutable_content_drawings.set(key, cache_index)
-            return cache_index
+        let key = self.mutable_content_key(entity_index, order, 0, canvas)
+        if self.content_drawing_revisions.contains(key) &&
+            self.content_drawing_revisions.get(key) == canvas.prepared_revision()
+        {
+            return self.mutable_content_drawings.get(key) + 0
         }
         let packed = Packing.drawing_vertices(geometry)
-        return self.mutable_content_drawing(
+        let cache_index = self.mutable_content_drawing(
             device,
-            self.mutable_content_key(entity_index, order, 0, canvas),
+            key,
             canvas.prepared_revision(),
             canvas.geometry_revision(),
             packed,
             geometry.vertex_count(),
             36
         )
-    }
-
-    private func register_shadow_drawing(
-        device:@GPU.Device,
-        geometry:@Mesh
-    ) int {
-        let packed = Packing.shadow_vertices(geometry)
-        return self.register_packed_drawing(
-            device,
-            packed,
-            geometry.vertex_count(),
-            60
-        )
+        self.content_drawing_revisions.set(key, canvas.prepared_revision())
+        return cache_index
     }
 
     private func shadow_drawing_cache(
@@ -3022,25 +2999,24 @@ package class Renderer {
                 60
             )
         }
-        if !canvas.is_detached() && canvas.revision() <= 1 {
-            let key = self.mutable_content_key(entity_index, order, 1, canvas)
-            if self.mutable_content_drawings.contains(key) {
-                return self.mutable_content_drawings.get(key) + 0
-            }
-            let cache_index = self.register_shadow_drawing(device, geometry)
-            self.mutable_content_drawings.set(key, cache_index)
-            return cache_index
+        let key = self.mutable_content_key(entity_index, order, 1, canvas)
+        if self.content_drawing_revisions.contains(key) &&
+            self.content_drawing_revisions.get(key) == canvas.prepared_revision()
+        {
+            return self.mutable_content_drawings.get(key) + 0
         }
         let packed = Packing.shadow_vertices(geometry)
-        return self.mutable_content_drawing(
+        let cache_index = self.mutable_content_drawing(
             device,
-            self.mutable_content_key(entity_index, order, 1, canvas),
+            key,
             canvas.prepared_revision(),
             canvas.geometry_revision(),
             packed,
             geometry.vertex_count(),
             60
         )
+        self.content_drawing_revisions.set(key, canvas.prepared_revision())
+        return cache_index
     }
 
     private func mutable_content_key(

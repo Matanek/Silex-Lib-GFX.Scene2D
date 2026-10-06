@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Les caches vectoriels distinguent les faces de chaque glyphe pour les lignes Canvas qui utilisent une police de secours.
+
+- Correction des fonds et bordures conservant leur ancienne géométrie après redimensionnement de dessins Canvas réutilisés. Le cache suit la révision de chaque contenu ; les dessins inchangés ne provoquent pas de nouvel upload.
+
 - Ajout de `Parallax` pour les sprites et les tilemaps : facteurs X/Y, origine et répétition en coordonnées monde. Les copies visibles d’une tilemap partagent sa préparation et un seul dessin GPU ; les positions ECS restent inchangées.
 
 - Correction des fuites de pixels entre régions d’atlas pour les sprites et les tilemaps lors des déplacements fractionnaires de caméra. Les shaders bornent la lecture à la région sélectionnée, sans réduire les UV ; une régression GPU hors écran couvre le MSAA ×4 et les deux modes d’échantillonnage.
