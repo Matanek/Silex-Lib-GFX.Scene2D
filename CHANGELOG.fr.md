@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Les uploads des instances de glyphes préservent les buffers de transfert et de dessin déjà référencés par des passes GPU. Les rangées Canvas découpées restent complètes lorsque plusieurs surfaces partagent un lot différé, y compris au survol et à la sélection.
+
 - Composer les groupes Canvas découpés avec les surfaces GPU retenues, après leurs effets enfants. Les groupes vides sont ignorés ; les changements de limites invalident leur surface sans reconstruire les groupes inchangés.
 
 - Les caches vectoriels distinguent les faces de chaque glyphe pour les lignes Canvas qui utilisent une police de secours.

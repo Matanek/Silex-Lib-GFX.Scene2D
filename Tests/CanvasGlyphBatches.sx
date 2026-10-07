@@ -1,0 +1,76 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+func paint_rows(drawing:Canvas, selected:int) {
+    drawing.clear()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.clip(Canvas.Rect(Math.Vec2(), Math.Vec2(360.0, 528.0)), func(viewport:&Canvas.Painter) {
+            var index = 0
+            while index < 12 {
+                let y = index as float * 44.0
+                viewport.clip(Canvas.Rect(Math.Vec2(0.0, y), Math.Vec2(360.0, 44.0)), func(row:&Canvas.Painter) {
+                    if index == selected {
+                        row.fill(Canvas.Rect(Math.Vec2(0.0, y), Math.Vec2(360.0, 44.0)),
+                            Canvas.Fill.solid(Color.cyan_500()))
+                    }
+                    row.text("Projet $(index + 185)", Math.Vec2(12.0, y + 8.0),
+                        Canvas.TextStyle(size:18.0, color:Color.white()),
+                        clip:Canvas.Rect(Math.Vec2(12.0, y + 8.0), Math.Vec2(324.0, 28.0)))
+                })
+                index++
+            }
+        })
+    })
+}
+func download_rows(device:@GPU.Device, surface:@Scene2D.CanvasSurface) uint8[] {
+    var download = device.download_buffer(surface.width() * surface.height() * 4)
+    var commands = device.commands()
+    var transfer = commands.copy()
+    transfer.download(GPU.TextureRegion(texture:surface.texture(), width:surface.width(),
+        height:surface.height()), download, surface.width(), surface.height())
+    transfer.finish()
+    var completed = commands.submit_and_track()
+    completed.wait()
+    return download.read()
+}
+func check_rows() {
+    print("Glyphes GPU : démarrage")
+    var device = GPU.Device()
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = Canvas()
+    var snapshot = drawing.snapshot(360, 528)
+    let selections:int[] = [-1, 2, 5, -1]
+    for selected in selections {
+        paint_rows(drawing, selected)
+        snapshot = drawing.snapshot(360, 528, snapshot)
+        renderer.begin_frame(device)
+        var surface = renderer.render(snapshot, Canvas.Rect(Math.Vec2(), Math.Vec2(360.0, 528.0)),
+            1.0, Scene2D.CanvasTextMode.coverage)
+        renderer.finish_frame()
+        let pixels = download_rows(device, surface)
+        var row = 0
+        while row < 12 {
+            var ink = 0
+            var y = row * 44
+            while y < (row + 1) * 44 {
+                var x = 0
+                while x < 360 {
+                    let pixel = (y * 360 + x) * 4
+                    if pixels[pixel] > 180 as uint8 && pixels[pixel + 1] > 180 as uint8 &&
+                        pixels[pixel + 2] > 180 as uint8 && pixels[pixel + 3] > 100 as uint8 { ink++ }
+                    x++
+                }
+                y++
+            }
+            print("Glyphes sélection=$(selected) ligne=$(row + 185) pixels=$(ink)")
+            assert(ink > 100)
+            row++
+        }
+    }
+    print("Glyphes GPU : OK")
+}
+func main() { check_rows() }
+test "batched clipped rows retain their glyphs beyond the four instance slots" { check_rows() }

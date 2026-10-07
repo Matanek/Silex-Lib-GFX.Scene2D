@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Glyph-instance uploads preserve transfer and drawing buffers already referenced by GPU passes. Clipped Canvas rows remain complete when multiple surfaces share a deferred batch, including hover and selection repaints.
+
 - Compose clipped Canvas groups through retained GPU surfaces after child effects. Empty groups are skipped; changed bounds invalidate their surface while unchanged groups remain cached.
 
 - Vector caches distinguish each glyph face for Canvas lines using a fallback font.

@@ -1712,8 +1712,9 @@ package class Renderer {
                 var packed = pack_coverage_instances(grouped.instances)
                 if let upload = cache.upload {
                     if let destination = cache.instances {
-                        upload.write_packed(packed, byte_count)
-                        copy_buffer(device, upload, destination, byte_count, cycle:false)
+                        // A previous surface pass can still reference both buffers.
+                        upload.write_packed(packed, byte_count, cycle:true)
+                        copy_buffer(device, upload, destination, byte_count, cycle:true)
                     }
                 }
             }
@@ -3584,9 +3585,12 @@ package class Renderer {
             if let destination = slot.instances {
                 upload.write_packed(
                     self.coverage_instance_packed,
-                    byte_count
+                    byte_count,
+                    cycle:true
                 )
-                copy_buffer(device, upload, destination, byte_count, cycle:false)
+                // Four slots bound allocation capacity, not in-flight passes:
+                // clipped rows can share a deferred batch longer than this ring.
+                copy_buffer(device, upload, destination, byte_count, cycle:true)
                 self.coverage_instance_uploads++
             }
         }
