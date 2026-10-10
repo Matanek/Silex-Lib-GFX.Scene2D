@@ -1803,14 +1803,14 @@ package class Renderer {
         var raster_top = 0
         var raster_alpha = ""
         var retained_instance = instance
-        match retained_instance.rasterize_glyph(
+        match (try retained_instance.rasterize_glyph(
             glyph_id,
             VectorFont.GlyphRasterOptions(
                 density:density as float64,
                 hinting:VectorFont.Hinting.normal(),
                 antialiasing:VectorFont.Antialiasing.grayscale()
             )
-        ) {
+        )) {
             failure(error) => { return -1 }
             success(coverage) => {
                 if let value = coverage {
@@ -2066,7 +2066,7 @@ package class Renderer {
             }
         }
         var glyphs:VectorGlyph[] = []
-        match layer.vector_outlines() {
+        match (try layer.vector_outlines()) {
             failure(error) => { return null }
             success(placements) => {
                 for placement in placements {

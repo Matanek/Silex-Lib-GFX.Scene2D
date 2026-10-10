@@ -79,10 +79,10 @@ func quantized(value:float64) float {
 }
 
 test "tessellate glyph counters with non-zero holes" {
-    var face = required_face(Font.Face.default())
-    var instance = required_instance(Font.Instance.create(face, size:32.0))
-    var run = required_run(instance.shape("O"))
-    let outline = required_outline(instance.outline(run.glyphs()[0].id))
+    var face = required_face((try Font.Face.default()))
+    var instance = required_instance((try Font.Instance.create(face, size:32.0)))
+    var run = required_run((try instance.shape("O")))
+    let outline = required_outline((try instance.outline(run.glyphs()[0].id)))
     let mesh = VectorText.tessellate(outline, 0.0075)
     assert(mesh.triangle_count() > 0)
     let center = Math.Vec2(
@@ -102,7 +102,7 @@ class VectorProbe {
 func vector_mesh_count(drawing:&Canvas) int {
     var layers = drawing.snapshot(160, 40).text_layers()
     var glyphs:uint32[] = []
-    match layers[0].vector_outlines() {
+    match (try layers[0].vector_outlines()) {
         failure(error) => { panic(error.detail) }
         success(placements) => {
             for placement in placements {
@@ -550,14 +550,14 @@ struct AtlasCorpus {
 
 func atlas_scalar_text(scalar:uint32) str {
     var scalars:uint32[] = [scalar]
-    match UTF8.from_scalars(@scalars[0:scalars.count()]) {
+    match (try UTF8.from_scalars(@scalars[0:scalars.count()])) {
         failure(error) => { panic("invalid atlas test scalar $(scalar)") }
         success(value) => { return value }
     }
 }
 
 func atlas_corpus() AtlasCorpus {
-    var face = required_face(Font.Face.default())
+    var face = required_face((try Font.Face.default()))
     var glyphs:str[] = []
     var scalar:uint32 = 33
     while scalar <= 2_047 as uint32 && glyphs.count() < 20 {

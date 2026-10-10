@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Adopts one `Result` declaration: an ordinary call returns the value or
+  stops the program on failure; `try call()` keeps the `Result`. Existing calls
+  storing results and propagating failures are made explicit. This revision
+  requires the development toolchain with these `try` semantics; publication
+  must coordinate compiler and package versions.
+
 - Glyph-instance uploads preserve transfer and drawing buffers already referenced by GPU passes. Clipped Canvas rows remain complete when multiple surfaces share a deferred batch, including hover and selection repaints.
 
 - Compose clipped Canvas groups through retained GPU surfaces after child effects. Empty groups are skipped; changed bounds invalidate their surface while unchanged groups remain cached.

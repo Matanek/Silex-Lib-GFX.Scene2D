@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Adopte la déclaration `Result` unique : l’appel ordinaire rend la valeur
+  ou arrête le programme sur erreur ; `try appel()` conserve le `Result`. Les
+  anciens appels stockant un résultat et propagations deviennent explicites.
+  Cette révision requiert la toolchain de développement avec cette sémantique
+  de `try` ; sa publication doit coordonner les versions du compilateur et des
+  packages.
+
 - Les uploads des instances de glyphes préservent les buffers de transfert et de dessin déjà référencés par des passes GPU. Les rangées Canvas découpées restent complètes lorsque plusieurs surfaces partagent un lot différé, y compris au survol et à la sélection.
 
 - Composer les groupes Canvas découpés avec les surfaces GPU retenues, après leurs effets enfants. Les groupes vides sont ignorés ; les changements de limites invalident leur surface sans reconstruire les groupes inchangés.
