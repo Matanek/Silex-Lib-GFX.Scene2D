@@ -352,6 +352,10 @@ textures without another allocation. On the Scene2D path, source, effect, and
 filter passes for every surface in a frame are also recorded into one command
 buffer before submission; standalone `CanvasSurfaceRenderer.render` keeps its
 immediate submission contract.
+Surfaces needed by a nested preparation or a frame remain protected from eviction
+until it finishes. If that working set exceeds the 128-entry idle cache, temporary
+entries cover it and are then released; an already prepared child layer does not
+replace its parent's active renderer.
 `render_count()`, `cache_hit_count()`, `graph_pass_count()`,
 `texture_allocation_count()`, and `texture_byte_count()` report that work and
 currently cache-resident memory; a surface still retained by a consumer is not

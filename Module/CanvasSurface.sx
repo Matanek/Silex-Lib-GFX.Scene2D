@@ -11,6 +11,7 @@ use GFX.Scene2D.Canvas.TextMode
 use GFX.Scene2D.CanvasFilter.CanvasFilter
 use GFX.Scene2D.Packing
 use GFX.Scene2D.Renderer
+use GFX.Scene2D.SurfaceCachePolicy.SurfaceCachePolicy
 use STD.Math
 
 class SurfaceDeviceState {
@@ -293,7 +294,7 @@ public class CanvasSurfaceRenderer {
     private var filter_pipelines:CanvasFilterPipelineEntry[]
     private var filter_vertices:GPU.Buffer? = null
     private var filter_indices:GPU.Buffer? = null
-    private var eviction_cursor:int
+    private var cache_policy:SurfaceCachePolicy = SurfaceCachePolicy()
     private var filtered_eviction_cursor:int
     private var current_surface_revision:int
     private var current_device_generation:int
@@ -319,7 +320,6 @@ public class CanvasSurfaceRenderer {
         self.entries = []
         self.filtered_entries = []
         self.filter_pipelines = []
-        self.eviction_cursor = 0
         self.filtered_eviction_cursor = 0
         self.current_surface_revision = 0
         self.current_device_generation = 1
@@ -346,7 +346,6 @@ public class CanvasSurfaceRenderer {
         self.entries = []
         self.filtered_entries = []
         self.filter_pipelines = []
-        self.eviction_cursor = 0
         self.filtered_eviction_cursor = 0
         self.current_surface_revision = 0
         self.current_device_generation = 1
@@ -371,11 +370,13 @@ public class CanvasSurfaceRenderer {
         if self.frame_commands != null {
             panic("GFX.Scene2D CanvasSurface frame recording is already active")
         }
+        self.cache_policy.enter()
         self.frame_commands = device.commands()
         self.frame_render_passes = 0
     }
 
     module func finish_frame() {
+        let active = self.frame_commands != null
         if var commands = self.frame_commands {
             if self.frame_render_passes > 0 {
                 commands.submit()
@@ -385,6 +386,7 @@ public class CanvasSurfaceRenderer {
         }
         self.frame_commands = null
         self.frame_render_passes = 0
+        if active { self.end_surface_scope() }
     }
 
     func render(
@@ -652,9 +654,11 @@ public class CanvasSurfaceRenderer {
     }
 
     func invalidate() {
+        self.finish_frame()
         self.device_state.valid = false
         for entry in self.entries { entry.release() }
         self.entries.clear()
+        self.cache_policy = SurfaceCachePolicy()
         for entry in self.filtered_entries { entry.release() }
         self.filtered_entries.clear()
         self.filter_pipelines.clear()
@@ -759,6 +763,27 @@ public class CanvasSurfaceRenderer {
     ) CanvasSurface {
         self.require_request(frame, density)
         self.require_initialized(device)
+        self.cache_policy.enter()
+        var result = self.render_scoped_content(device, kind, identity, revision,
+            content, effects, frame, density, text_mode, exact_density)
+        self.end_surface_scope()
+        return result
+    }
+
+    private func end_surface_scope() {
+        let retained = self.cache_policy.leave()
+        while self.entries.count() > retained {
+            var removed = self.entries.take_last()
+            self.resident_texture_bytes -= removed.texture_byte_count()
+            removed.release()
+        }
+    }
+
+    private func render_scoped_content(
+        device:@GPU.Device, kind:int, identity:int, revision:int,
+        content:@Content[..], effects:@Effect[], frame:Rect, density:float,
+        text_mode:TextMode, exact_density:bool
+    ) CanvasSurface {
         var density_key = Math.max(1.0, Math.ceil(density * 4.0)) as int
         var resolved_density = density_key as float / 4.0
         if exact_density {
@@ -776,6 +801,7 @@ public class CanvasSurfaceRenderer {
         if known >= 0 {
             if let retained = self.entries[known].surface {
                 if retained.is_valid() {
+                    self.cache_policy.pin(known)
                     self.surface_cache_hits++
                     return retained
                 }
@@ -791,6 +817,7 @@ public class CanvasSurfaceRenderer {
             text_mode
         )
         if entry_index < 0 { entry_index = self.reusable_entry() }
+        else { self.cache_policy.pin(entry_index) }
         let width = Math.max(1.0, Math.ceil(frame.size.x * resolved_density)) as int
         let height = Math.max(1.0, Math.ceil(frame.size.y * resolved_density)) as int
         if width > 16_384 || height > 16_384 {
@@ -1266,13 +1293,9 @@ public class CanvasSurfaceRenderer {
     }
 
     private func reusable_entry() int {
-        if self.entries.count() < 128 {
-            self.entries.append(SurfaceCacheEntry())
-            return self.entries.count() - 1
-        }
-        let result = self.eviction_cursor
-        self.eviction_cursor = (self.eviction_cursor + 1) % self.entries.count()
-        return result
+        let index = self.cache_policy.acquire()
+        if index == self.entries.count() { self.entries.append(SurfaceCacheEntry()) }
+        return index
     }
 
     private func reusable_filtered_entry() int {
@@ -1346,7 +1369,7 @@ public class CanvasSurfaceRenderer {
     ) int {
         var index = 0
         while index < self.entries.count() {
-            if self.entries[index].superseded_owner(
+            if !self.cache_policy.leased(index) && self.entries[index].superseded_owner(
                 kind,
                 identity,
                 revision,

@@ -1,0 +1,61 @@
+// A preparation and its nested preparations share leases. A frame adds an
+// enclosing scope so later canvases cannot replace earlier pending draws.
+package class SurfaceCachePolicy {
+    private let capacity:int
+    private var pinned:bool[] = []
+    private var cursor:int = 0
+    private var depth:int = 0
+    private var pinned_count:int = 0
+
+    init(capacity:int = 128) {
+        if capacity <= 0 { panic("Canvas surface cache capacity must be positive") }
+        self.capacity = capacity
+    }
+
+    func enter() { self.depth++ }
+
+    func leave() int {
+        if self.depth <= 0 { panic("Canvas surface cache scope is not active") }
+        self.depth--
+        if self.depth == 0 {
+            while self.pinned.count() > self.capacity { self.pinned.take_last() }
+            var index = 0
+            while index < self.pinned.count() { self.pinned[index] = false; index++ }
+            self.pinned_count = 0
+            if self.cursor >= self.pinned.count() { self.cursor = 0 }
+        }
+        return self.pinned.count()
+    }
+
+    func pin(index:int) {
+        if !self.pinned[index] { self.pinned[index] = true; self.pinned_count++ }
+    }
+    func leased(index:int) bool { return self.pinned[index] }
+    func count() int { return self.pinned.count() }
+
+    func acquire() int {
+        if self.pinned.count() < self.capacity {
+            self.pinned.append(true)
+            self.pinned_count++
+            return self.pinned.count() - 1
+        }
+        if self.pinned_count == self.pinned.count() {
+            // The live working set may exceed the idle cache. Reclaim these
+            // temporary slots after its enclosing preparation/frame ends.
+            self.pinned.append(true)
+            self.pinned_count++
+            return self.pinned.count() - 1
+        }
+        var visited = 0
+        while visited < self.pinned.count() {
+            let index = (self.cursor + visited) % self.pinned.count()
+            if !self.pinned[index] {
+                self.pin(index)
+                self.cursor = (index + 1) % self.pinned.count()
+                return index
+            }
+            visited++
+        }
+        panic("Canvas surface cache lost an available slot")
+    }
+}

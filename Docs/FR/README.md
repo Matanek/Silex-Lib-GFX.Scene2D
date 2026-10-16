@@ -400,6 +400,10 @@ les textures retenues sans nouvelle allocation. Dans le parcours Scene2D, les
 passes source, effets et filtre de toutes les surfaces d’une frame sont aussi
 enregistrées dans un seul command buffer avant soumission ; l’API autonome
 `CanvasSurfaceRenderer.render` conserve sa soumission immédiate.
+Les surfaces nécessaires à une préparation imbriquée ou à une frame restent
+protégées de l’éviction jusqu’à sa fin. Si cet ensemble dépasse les 128 entrées
+du cache au repos, des entrées temporaires le couvrent puis sont libérées ;
+un calque enfant déjà préparé ne remplace pas le renderer actif de son parent.
 `render_count()`, `cache_hit_count()`, `graph_pass_count()`,
 `texture_allocation_count()` et `texture_byte_count()` mesurent ce travail et
 la mémoire actuellement résidente dans le cache ; une surface encore conservée

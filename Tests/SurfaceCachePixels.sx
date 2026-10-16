@@ -1,0 +1,72 @@
+use GFX.Canvas
+use GFX.Color
+use GFX.GPU
+use GFX.Scene2D
+use STD.Math
+
+func tile_color(index:int, generation:int) Color {
+    let channel = (index + generation) % 3
+    if channel == 0 { return Color(r:1.0, g:0.0, b:0.0, a:1.0) }
+    if channel == 1 { return Color(r:0.0, g:1.0, b:0.0, a:1.0) }
+    return Color(r:0.0, g:0.0, b:1.0, a:1.0)
+}
+
+func paint_tiles(drawing:Canvas, generation:int) {
+    drawing.clear()
+    drawing.paint(func(painter:&Canvas.Painter) {
+        painter.clip(Canvas.Rect(Math.Vec2(), Math.Vec2(96.0)), func(parent:&Canvas.Painter) {
+            var index = 0
+            while index < 144 {
+                let position = Math.Vec2((index % 12) as float * 8.0, (index / 12) as float * 8.0)
+                let color = tile_color(index, generation)
+                parent.clip(Canvas.Rect(position, Math.Vec2(8.0)), func(child:&Canvas.Painter) {
+                    child.fill(Canvas.Rect(position.add(Math.Vec2(1.0)), Math.Vec2(6.0)), Canvas.Fill.solid(color))
+                })
+                index++
+            }
+        })
+    })
+}
+
+func check_surface_cache_pixels() {
+    var device = GPU.Device(GPU.DeviceSettings(debug:true))
+    var renderer = Scene2D.CanvasSurfaceRenderer(device)
+    var drawing = Canvas()
+    for generation in [0,1,2] {
+        paint_tiles(drawing, generation)
+        var surface = renderer.render(drawing.snapshot(96,96), Canvas.Rect(Math.Vec2(), Math.Vec2(96.0)), 1.0)
+        var download = device.download_buffer(96 * 96 * 4)
+        var commands = device.commands()
+        var transfer = commands.copy()
+        transfer.download(GPU.TextureRegion(texture:surface.texture(), width:96, height:96), download, 96, 96)
+        transfer.finish()
+        var completed = commands.submit_and_track()
+        completed.wait()
+        let pixels = download.read()
+        var index = 0
+        while index < 144 {
+            let x = index % 12 * 8 + 4
+            let y = index / 12 * 8 + 4
+            let offset = (y * 96 + x) * 4
+            var channel = 0
+            while channel < 3 {
+                var expected = 0
+                if channel == (index + generation) % 3 { expected = 255 }
+                assert(Math.abs(pixels[offset + channel] as float - expected as float) <= 1.0,
+                    "cache pressure changed a retained child pixel")
+                channel++
+            }
+            assert(pixels[offset + 3] == 255 as uint8)
+            index++
+        }
+        assert(renderer.cache_entry_count() <= 128)
+    }
+    print("Surface cache pixels : OK")
+}
+
+test "nested clip pixels survive cache pressure and retained color changes" {
+    check_surface_cache_pixels()
+}
+
+// Deliberate GPU entry point: no window is created by this fixture.
+func main() { check_surface_cache_pixels() }

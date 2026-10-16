@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Keep clipped Canvas surfaces alive until their enclosing preparation or frame
+  finishes. Cache pressure no longer rebuilds a child through an active parent
+  renderer, which could stretch table headers during hover. Temporary entries
+  cover a live working set larger than the 128-entry idle cache.
+
 - Adopts one `Result` declaration: an ordinary call returns the value or
   stops the program on failure; `try call()` keeps the `Result`. Existing calls
   storing results and propagating failures are made explicit. This revision
