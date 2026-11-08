@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-11-08
 
 - Keep clipped Canvas surfaces alive until their enclosing preparation or frame
   finishes. Cache pressure no longer rebuilds a child through an active parent
@@ -9,9 +9,8 @@
 
 - Adopts one `Result` declaration: an ordinary call returns the value or
   stops the program on failure; `try call()` keeps the `Result`. Existing calls
-  storing results and propagating failures are made explicit. This revision
-  requires the development toolchain with these `try` semantics; publication
-  must coordinate compiler and package versions.
+  storing results and propagating failures are made explicit. This version
+  requires Silex 0.48.0 or newer and the coordinated dependency versions.
 
 - Glyph-instance uploads preserve transfer and drawing buffers already referenced by GPU passes. Clipped Canvas rows remain complete when multiple surfaces share a deferred batch, including hover and selection repaints.
 
