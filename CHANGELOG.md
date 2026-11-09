@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.0] - 2026-11-08
+## [0.4.0] - 2026-11-09
 
 - Keep clipped Canvas surfaces alive until their enclosing preparation or frame
   finishes. Cache pressure no longer rebuilds a child through an active parent

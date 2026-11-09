@@ -1,6 +1,8 @@
 # Changelog
 
-## [0.4.0] - 2026-11-08
+## [0.4.0] - 2026-11-09
+
+- Garder les surfaces Canvas découpées vivantes jusqu’à la fin de leur préparation ou frame englobante. La pression du cache ne reconstruit plus un enfant à travers son parent actif, ce qui pouvait étirer les en-têtes de tableau au survol. Des entrées temporaires couvrent les surfaces actives au-delà des 128 entrées conservées au repos.
 
 - Adopte la déclaration `Result` unique : l’appel ordinaire rend la valeur
   ou arrête le programme sur erreur ; `try appel()` conserve le `Result`. Les
